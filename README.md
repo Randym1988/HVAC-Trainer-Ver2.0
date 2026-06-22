@@ -19,6 +19,8 @@ Integrated monorepo for HVAC training systems, designed to support instructor to
 - [Service Endpoints](#service-endpoints)
 - [Firmware Workflow](#firmware-workflow)
 - [CI Pipeline](#ci-pipeline)
+- [Screenshots](#screenshots)
+- [Contributing](#contributing)
 - [Development Conventions](#development-conventions)
 - [Current Status](#current-status)
 - [License](#license)
@@ -163,6 +165,31 @@ The CI workflow is defined in .github/workflows/ci.yml and currently performs:
 - Monorepo build execution
 
 As the codebase grows, extend this pipeline with lint, tests, firmware checks, and deployment gates.
+
+## Screenshots
+
+Add screenshots as the product matures to improve onboarding and release communication.
+
+- docs/screenshots/instructor-dashboard.png (planned)
+- docs/screenshots/student-lab-flow.png (planned)
+- docs/screenshots/telemetry-panel.png (planned)
+
+Suggested capture standards:
+
+- Use 1440px+ desktop captures for instructor views.
+- Include one mobile screenshot when mobile-core milestones are reached.
+- Prefer realistic training session data over placeholder values.
+
+## Contributing
+
+Contributions are welcome. For standards, workflow, and review expectations, see CONTRIBUTING.md.
+
+Quick contributor workflow:
+
+1. Create a feature branch from main.
+2. Keep changes scoped and include documentation updates when behavior changes.
+3. Run build and relevant tests before opening a pull request.
+4. Open a PR with a clear summary, risk notes, and validation steps.
 
 ## Development Conventions
 
