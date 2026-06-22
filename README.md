@@ -1,6 +1,27 @@
 # HVAC Next Gen Monorepo
 
+![CI](https://img.shields.io/github/actions/workflow/status/Randym1988/HVAC-Trainer-Ver2.0/ci.yml?branch=main&label=CI)
+![Repository](https://img.shields.io/badge/monorepo-turborepo-blue)
+![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
+![License](https://img.shields.io/badge/license-add%20license-lightgrey)
+
 Integrated monorepo for HVAC training systems, designed to support instructor tools, student lab interfaces, mobile runtime integration, backend control services, and hardware firmware in one versioned codebase.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Technology Stack](#technology-stack)
+- [Repository Structure](#repository-structure)
+- [System Architecture](#system-architecture)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Workspace Scripts](#workspace-scripts)
+- [Service Endpoints](#service-endpoints)
+- [Firmware Workflow](#firmware-workflow)
+- [CI Pipeline](#ci-pipeline)
+- [Development Conventions](#development-conventions)
+- [Current Status](#current-status)
+- [License](#license)
 
 ## Overview
 
@@ -46,6 +67,25 @@ hvac-next-gen/
   docs/
     architecture/           # Architecture notes and system direction
 ```
+
+## System Architecture
+
+```mermaid
+flowchart LR
+  FW1[AC Gas Furnace Firmware] --> API[Control API]
+  FW2[Heat Pump Firmware] --> API
+  API <--> TYPES[Shared Types Package]
+  IWEB[Instructor Web] <--> API
+  SWEB[Student Web] <--> API
+  MOBILE[Mobile Core] <--> API
+```
+
+Architecture intent:
+
+- Firmware emits telemetry and receives control directives through API-facing transport layers.
+- Control API centralizes state, event orchestration, and safety rules.
+- Shared types package provides a single contract source for frontend and backend.
+- Instructor and student applications consume normalized state from the API.
 
 ## Prerequisites
 
