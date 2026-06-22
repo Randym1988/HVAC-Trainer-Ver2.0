@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.vscode/
+.env
+.env.*
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+*.log
+.platformio/
+.venv/

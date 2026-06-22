@@ -1,0 +1,27 @@
+services:
+  control-api:
+    image: node:20-alpine
+    working_dir: /workspace
+    volumes:
+      - ../../:/workspace
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @services/control-api dev"
+    ports:
+      - "8080:8080"
+
+  instructor-web:
+    image: node:20-alpine
+    working_dir: /workspace
+    volumes:
+      - ../../:/workspace
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @apps/instructor-web dev --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+
+  student-web:
+    image: node:20-alpine
+    working_dir: /workspace
+    volumes:
+      - ../../:/workspace
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @apps/student-web dev --host 0.0.0.0 --port 5174"
+    ports:
+      - "5174:5174"
