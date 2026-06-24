@@ -1,27 +1,55 @@
 services:
+  workspace-bootstrap:
+    image: node:20-alpine
+    working_dir: /workspace
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    volumes:
+      - ../../:/workspace
+    command: sh -c "corepack enable && pnpm install"
+
   control-api:
     image: node:20-alpine
     working_dir: /workspace
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      workspace-bootstrap:
+        condition: service_completed_successfully
     volumes:
       - ../../:/workspace
-    command: sh -c "corepack enable && pnpm install && pnpm --filter @services/control-api dev"
+    command: sh -c "corepack enable && pnpm --filter @services/control-api dev"
     ports:
       - "8080:8080"
 
   instructor-web:
     image: node:20-alpine
     working_dir: /workspace
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      workspace-bootstrap:
+        condition: service_completed_successfully
     volumes:
       - ../../:/workspace
-    command: sh -c "corepack enable && pnpm install && pnpm --filter @apps/instructor-web dev --host 0.0.0.0 --port 5173"
+    command: sh -c "corepack enable && pnpm --filter @apps/instructor-web dev --host 0.0.0.0 --port 5173"
     ports:
       - "5173:5173"
 
   student-web:
     image: node:20-alpine
     working_dir: /workspace
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      workspace-bootstrap:
+        condition: service_completed_successfully
     volumes:
       - ../../:/workspace
-    command: sh -c "corepack enable && pnpm install && pnpm --filter @apps/student-web dev --host 0.0.0.0 --port 5174"
+    command: sh -c "corepack enable && pnpm --filter @apps/student-web dev --host 0.0.0.0 --port 5174"
     ports:
       - "5174:5174"
