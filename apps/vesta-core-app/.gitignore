@@ -1,0 +1,22 @@
+# Node dependencies
+node_modules/
+package-lock.json
+
+# IDEs and editors
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Android build and local files
+android/.gradle/
+android/build/
+android/local.properties
+android/app/build/
+android/.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

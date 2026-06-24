@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Vesta Core | Diagnostics</title>
+    <script src="capacitor.js"></script>
+    <script>
+        // Shim capacitorExports for non-bundled plugins running on native Android
+        var capacitorExports = window.Capacitor || {};
+        if (!capacitorExports.registerPlugin) {
+            capacitorExports.registerPlugin = function(pluginName, options) {
+                var plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+                // Try exact match first
+                if (plugins[pluginName]) return plugins[pluginName];
+                // Try case-insensitive match (e.g. bluetoothle vs BluetoothLe)
+                var lowerName = pluginName.toLowerCase();
+                for (var key in plugins) {
+                    if (key.toLowerCase() === lowerName) {
+                        return plugins[key];
+                    }
+                }
+                return {};
+            };
+        }
+        if (!capacitorExports.WebPlugin) {
+            class WebPlugin {
+                constructor(config) { this.config = config; }
+            }
+            capacitorExports.WebPlugin = WebPlugin;
+        }
+        if (!capacitorExports.Capacitor) {
+            capacitorExports.Capacitor = window.Capacitor;
+        }
+        window.capacitorExports = capacitorExports;
+    </script>
+    <script src="bluetooth-le.js"></script>
+    <style>
+        /* --- VESTA SPLASH SCREEN --- */
+        #splash-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #050b14; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 9999;
+            transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.8s;
+        }
+        .splash-v-logo { width: 120px; height: 120px; margin-bottom: 20px; }
+        .v-svg-splash { width: 100%; height: 100%; filter: drop-shadow(0 0 20px rgba(14, 165, 233, 0.5)); }
+        .v-left-s { fill: none; stroke: #0ea5e9; stroke-width: 8; stroke-linecap: round; stroke-dasharray: 100; animation: drawS 2s ease-in-out infinite alternate; }
+        .v-right-s { fill: none; stroke: #ef4444; stroke-width: 8; stroke-linecap: round; stroke-dasharray: 100; animation: drawS 2s ease-in-out infinite alternate-reverse; }
+        .v-core-s { fill: white; filter: drop-shadow(0 0 10px white); animation: pulseS 1.5s infinite; }
+        @keyframes drawS { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+        @keyframes pulseS { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.4); opacity: 0.7; } }
+        .splash-text { font-size: 14px; font-weight: 800; letter-spacing: 4px; color: white; text-transform: uppercase; margin-top: 10px; opacity: 0.6; animation: breath 2s infinite ease-in-out; }
+        @keyframes breath { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.8; } }
+        #splash-overlay.hidden { opacity: 0; visibility: hidden; }
+
+        :root {
+            --bg-base: #09090b; --bg-card: #18181b; --text-main: #f4f4f5;
+            --text-muted: #a1a1aa; --text-faint: #52525b; --accent-blue: #0ea5e9;
+            --accent-red: #ef4444; --accent-green: #10b981; --accent-yellow: #f59e0b;
+            --border-color: rgba(255, 255, 255, 0.08);
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { background: var(--bg-base); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; background-image: radial-gradient(circle at 15% 0%, rgba(14, 165, 233, 0.08) 0%, transparent 50%), radial-gradient(circle at 85% 0%, rgba(239, 68, 68, 0.05) 0%, transparent 50%); }
+
+        .header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: rgba(9, 9, 11, 0.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 20; }
+        .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+        .status-badge { display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; border: 1px solid var(--border-color); }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+        .status-dot.live { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+
+        .toolbar { padding: 12px 20px; border-bottom: 1px solid var(--border-color); display: flex; gap: 15px; align-items: center; }
+        .framed-select-wrap { position: relative; border-radius: 8px; padding: 2px; display: flex; background: rgba(0,0,0,0.2); flex: 1; border: 1px solid rgba(14, 165, 233, 0.4); box-shadow: inset 0 0 10px rgba(14, 165, 233, 0.05); }
+        .framed-select-wrap select { background: transparent; border: none; color: var(--text-main); padding: 8px 30px 8px 12px; font-size: 13px; font-weight: 800; outline: none; flex: 1; appearance: none; -webkit-appearance: none; cursor: pointer; }
+        .framed-select-wrap select:disabled { opacity: 0.6; cursor: not-allowed; }
+        .framed-select-wrap::after { content: '▼'; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--text-muted); pointer-events: none; }
+
+        .viewport { flex: 1; overflow-y: auto; padding: 15px 15px 160px 15px; position: relative; } 
+        #content-wrapper { position: relative; will-change: transform; min-height: 100%; }
+        
+        .view { display: none; animation: fadeUp 0.3s ease-out forwards; max-width: 800px; margin: 0 auto; }
+        .view.active { display: block; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .card { background: var(--bg-card); border-radius: 16px; border: 1px solid var(--border-color); margin-bottom: 15px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .card-header { padding: 12px 16px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); }
+        .card-body { padding: 16px; }
+
+        .theme-blue .card-header { color: var(--accent-blue); background: linear-gradient(90deg, rgba(14, 165, 233, 0.1), transparent); }
+        .theme-red .card-header { color: var(--accent-red); background: linear-gradient(90deg, rgba(239, 68, 68, 0.1), transparent); }
+        .theme-green .card-header { color: var(--accent-green); background: linear-gradient(90deg, rgba(16, 185, 129, 0.1), transparent); }
+        .theme-elec .card-header { color: var(--accent-yellow); background: linear-gradient(90deg, rgba(245, 158, 11, 0.1), transparent); }
+
+        .main-metric { display: flex; align-items: baseline; gap: 4px; margin-bottom: 15px; }
+        .main-metric .value { font-size: 48px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -2px; }
+        .main-metric .unit { font-size: 14px; font-weight: 700; color: var(--text-muted); }
+
+        .gauge-container { width: 100%; height: 6px; background: #27272a; border-radius: 3px; margin-bottom: 20px; overflow: hidden; position: relative; }
+        .gauge-fill { height: 100%; border-radius: 3px; transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+        .theme-blue .gauge-fill { background: var(--accent-blue); box-shadow: 0 0 10px var(--accent-blue); }
+        .theme-red .gauge-fill { background: var(--accent-red); box-shadow: 0 0 10px var(--accent-red); }
+
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border-color); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+        .data-cell { background: var(--bg-card); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+        .data-cell .label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
+        .data-cell .val { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+        .data-cell .unit { font-size: 11px; color: var(--text-faint); font-weight: 600; margin-left: 2px; }
+
+        .highlight-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(255,255,255,0.03); margin-top: 15px; border-radius: 10px; border: 1px solid var(--border-color); }
+        .highlight-row .label { font-size: 13px; font-weight: 700; }
+        .highlight-row .val { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+        .context-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 15px; }
+        .context-chip { background: #27272a; padding: 10px; border-radius: 10px; text-align: center; border: 1px solid var(--border-color); }
+        .context-chip .label { font-size: 9px; color: var(--text-muted); font-weight: 800; text-transform: uppercase; margin-bottom: 4px; display: block; }
+        .context-chip .val { font-size: 16px; font-weight: 800; }
+
+        /* MULTIMETER UI STYLES */
+        .meter-buttons { display: flex; gap: 6px; margin-bottom: 15px; background: rgba(0,0,0,0.3); padding: 6px; border-radius: 12px; border: 1px solid var(--border-color); overflow-x: auto; }
+        .meter-btn { flex: 1; padding: 10px 8px; background: transparent; border: none; color: var(--text-muted); font-size: 11px; font-weight: 800; border-radius: 8px; cursor: pointer; transition: all 0.2s; text-align: center; white-space: nowrap; }
+        .meter-btn.active { background: var(--accent-yellow); color: #000; box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4); }
+        .meter-btn-reset { padding: 10px 12px; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: var(--accent-red); font-size: 11px; font-weight: 800; border-radius: 8px; cursor: pointer; transition: 0.2s; }
+        .meter-btn-reset:active { transform: scale(0.95); }
+
+        .nameplate-banner { background: rgba(245,158,11,0.05); border: 1px solid rgba(245,158,11,0.3); padding: 12px 15px; border-radius: 12px; margin-bottom: 15px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; }
+        .nameplate-item { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid rgba(255,255,255,0.05); }
+        .nameplate-item:last-child { border: none; }
+        .nameplate-label { font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; }
+        .nameplate-val { font-size: 13px; font-weight: 800; color: var(--accent-yellow); }
+
+        .nav-dock { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(24, 24, 27, 0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid var(--border-color); border-radius: 32px; padding: 8px; display: flex; gap: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); z-index: 100; }
+        .nav-btn { padding: 12px; border-radius: 24px; color: var(--text-muted); font-size: 12px; font-weight: 800; text-transform: uppercase; cursor: pointer; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: flex; align-items: center; justify-content: center; }
+        .nav-label { max-width: 0; opacity: 0; overflow: hidden; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); white-space: nowrap; margin-left: 0; }
+        .nav-btn:hover, .nav-btn.active { background: rgba(255,255,255,0.1); color: var(--text-main); padding: 12px 20px; }
+        .nav-btn:hover .nav-label, .nav-btn.active .nav-label { max-width: 100px; opacity: 1; margin-left: 8px; }
+        .nav-btn svg { width: 22px; height: 22px; fill: currentColor; flex-shrink: 0; transition: all 0.3s; }
+        .nav-btn.active svg { color: var(--accent-blue); filter: drop-shadow(0 2px 6px rgba(14, 165, 233, 0.6)); transform: scale(1.1); }
+
+        .submit-btn { width: 100%; background: var(--accent-blue); color: white; font-size: 15px; font-weight: 800; padding: 16px; border: none; border-radius: 12px; margin-top: 15px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(14, 165, 233, 0.3); cursor: pointer; }
+        .submit-btn:active { transform: scale(0.98); }
+
+        .tool-select { background: #27272a; color: white; border: 1px solid var(--border-color); padding: 14px; border-radius: 12px; font-size: 14px; font-weight: 700; outline: none; width: 100%; margin-bottom: 15px; }
+
+        .trainer-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 10px; margin-bottom: 8px; border: 1px solid var(--border-color); }
+        .trainer-name { font-size: 14px; font-weight: 700; }
+        .trainer-id { font-size: 10px; color: var(--text-faint); }
+        .connect-btn { background: var(--accent-blue); color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 800; cursor: pointer; }
+
+        /* PULL TO REFRESH STYLES */
+        #pull-indicator {
+            position: fixed; top: -60px; left: 0; width: 100%; height: 60px;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 1000; pointer-events: none; transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .refresh-circle {
+            background: var(--bg-card); border: 1px solid var(--accent-blue);
+            border-radius: 50%; width: 42px; height: 42px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6); color: var(--accent-blue);
+        }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="pull-indicator">
+    <div class="refresh-circle">
+        <svg id="refresh-svg" viewBox="0 0 24 24" style="width: 24px; height: 24px; fill: currentColor;">
+            <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+        </svg>
+    </div>
+</div>
+
+<div id="login-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-base); z-index: 9998; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s;">
+    <div class="card" style="width: 100%; max-width: 350px; text-align: center; padding: 40px; border-color: rgba(16, 185, 129, 0.4); box-shadow: 0 0 40px rgba(16, 185, 129, 0.15);">
+        <svg viewBox="0 0 100 100" style="width: 60px; height: 60px; margin-bottom: 15px; filter: drop-shadow(0 0 15px rgba(14, 165, 233, 0.4));">
+            <path d="M10 15 L50 90" fill="none" stroke="#0ea5e9" stroke-width="8" stroke-linecap="round"/>
+            <path d="M90 15 L50 90" fill="none" stroke="#ef4444" stroke-width="8" stroke-linecap="round"/>
+            <circle cx="50" cy="90" r="6" fill="white" />
+        </svg>
+        <h2 style="margin-top: 0; color: white; font-size: 24px;">Student Portal</h2>
+        <p style="color: var(--text-muted); font-size: 11px; margin-bottom: 25px; letter-spacing: 2px;">DIAGNOSTIC ACCESS</p>
+        
+        <input type="text" id="login_user" placeholder="Student ID" style="width: 100%; padding: 14px; margin-bottom: 15px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); color: white; border-radius: 10px; font-size: 14px; outline: none;">
+        <input type="password" id="login_pass" placeholder="Password" style="width: 100%; padding: 14px; margin-bottom: 25px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); color: white; border-radius: 10px; font-size: 14px; outline: none;" onkeypress="if(event.key === 'Enter') attemptLogin('student')">
+        
+        <button class="submit-btn" style="background: var(--accent-green); margin-top:0;" onclick="attemptLogin('student')">BEGIN SESSION</button>
+        <button style="width: 100%; background: transparent; color: var(--text-muted); border: 1px solid var(--border-color); font-size: 12px; font-weight: 600; padding: 12px; margin-top: 15px; border-radius: 10px; cursor: pointer;" onclick="bypassLogin()">BYPASS LOGIN</button>
+        <div id="login_error" style="color: var(--accent-red); margin-top: 20px; font-size: 12px; font-weight: bold; display: none;">⚠ Invalid Credentials</div>
+    </div>
+</div>
+<script>if (document.cookie.includes('vesta_auth=')) { document.getElementById('login-overlay').style.display = 'none'; }</script>
+
+<div id="splash-overlay">
+    <div class="splash-v-logo">
+        <svg class="v-svg-splash" viewBox="0 0 100 100">
+            <path class="v-left-s" d="M10 15 L50 90" />
+            <path class="v-right-s" d="M90 15 L50 90" />
+            <circle class="v-core-s" cx="50" cy="90" r="6" />
+        </svg>
+    </div>
+    <div class="splash-text">Vesta Core</div>
+</div>
+
+<div class="header">
+    <div class="brand">
+        <svg viewBox="0 0 100 100" style="width: 26px; height: 26px;">
+            <path d="M10 15 L50 90" fill="none" stroke="#0ea5e9" stroke-width="8" stroke-linecap="round"/>
+            <path d="M90 15 L50 90" fill="none" stroke="#ef4444" stroke-width="8" stroke-linecap="round"/>
+            <circle cx="50" cy="90" r="6" fill="white" />
+        </svg>
+        Vesta Core
+    </div>
+    <div style="display: flex; gap: 15px; align-items: center;">
+        <div class="status-badge"><div class="status-dot" id="ws-status"></div> Live</div>
+        <button style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-color); color: var(--text-main); padding: 6px; border-radius: 8px; cursor: pointer; display: flex; align-items: center;" onclick="switchView('view-settings', this)">
+            <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.81,11.69,4.81,12c0,0.31,0.02,0.65,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+        </button>
+        <button style="background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4); color: var(--accent-red); padding: 6px 12px; border-radius: 8px; font-size: 10px; font-weight: 800; cursor: pointer; text-transform: uppercase;" onclick="logoutUser()">Logout</button>
+    </div>
+</div>
+
+<div class="toolbar">
+    <span style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">System Ref:</span>
+    <div class="framed-select-wrap">
+        <select id="refrigerant_type">
+           <option value="R410A">R-410A</option>
+           <option value="R454B">R-454B</option>
+           <option value="R32">R-32</option>
+           <option value="R22">R-22</option>
+           <option value="R134a">R-134a</option>
+           <option value="R404A">R-404A</option>
+           <option value="R407C">R-407C</option>
+        </select>
+    </div>
+</div>
+
+<div class="viewport" id="viewport">
+    <div id="content-wrapper">
+        
+        <div id="view-refrigeration" class="view active">
+            <div class="context-grid">
+                <div class="context-chip"><span class="label">Outdoor DB</span><span class="val" id="od_ambient">--°</span></div>
+                <div class="context-chip"><span class="label">Target SH</span><span class="val text-blue">12.0°</span></div>
+                <div class="context-chip"><span class="label">Target SC</span><span class="val text-red">10.0°</span></div>
+            </div>
+            <div class="data-grid" style="margin-bottom: 15px;">
+                <div class="data-cell"><span class="label text-blue">Indoor Metering</span><div><span class="val text-blue" id="indoor_metering">--</span></div></div>
+                <div class="data-cell"><span class="label text-red">Outdoor Metering</span><div><span class="val text-red" id="outdoor_metering">--</span></div></div>
+            </div>
+            <div class="card theme-blue">
+                <div class="card-header"><span>Suction Line (Low Side)</span><span id="mode_ac" style="display:none;">❄️ AC RUNNING</span></div>
+                <div class="card-body">
+                    <div class="main-metric"><span class="value text-blue" id="low_press">--</span><span class="unit">PSIG</span></div>
+                    <div class="gauge-container"><div class="gauge-fill" id="bar_low" style="width: 0%;"></div></div>
+                    <div class="data-grid">
+                        <div class="data-cell"><span class="label">Vapor Saturation</span><div><span class="val" id="low_sat">--</span><span class="unit">°F</span></div></div>
+                        <div class="data-cell"><span class="label">Suction Line Temp</span><div><span class="val" id="suction_temp">--</span><span class="unit">°F</span></div></div>
+                    </div>
+                    <div class="highlight-row text-blue"><span class="label">System Superheat</span><span class="val" id="superheat">--°F</span></div>
+                </div>
+            </div>
+            <div class="card theme-red">
+                <div class="card-header"><span>Liquid Line (High Side)</span><span id="mode_hp" style="display:none;">🔥 HP RUNNING</span></div>
+                <div class="card-body">
+                    <div class="main-metric"><span class="value text-red" id="liquid_press">--</span><span class="unit">PSIG</span></div>
+                    <div class="gauge-container"><div class="gauge-fill" id="bar_high" style="width: 0%;"></div></div>
+                    <div class="data-grid">
+                        <div class="data-cell"><span class="label">Liquid Saturation</span><div><span class="val" id="high_sat">--</span><span class="unit">°F</span></div></div>
+                        <div class="data-cell"><span class="label">Liquid Line Temp</span><div><span class="val" id="liquid_temp">--</span><span class="unit">°F</span></div></div>
+                        <div class="data-cell"><span class="label text-blue">Indoor Suction Line</span><div><span class="val" id="id_suction_temp">--</span><span class="unit">°F</span></div></div>
+                        <div class="data-cell"><span class="label text-red">Indoor Liquid Line</span><div><span class="val" id="id_liquid_temp">--</span><span class="unit">°F</span></div></div>
+                    </div>
+                    <div class="highlight-row text-red"><span class="label">System Subcooling</span><span class="val" id="subcool">--°F</span></div>
+                    <div class="highlight-row text-red" id="heat_discharge_row" style="display: none; margin-top: 10px; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.05);">
+                        <span class="label">COMPRESSOR DISCHARGE HEAD</span>
+                        <div><span class="val" id="discharge_press_val">--</span><span class="unit">PSIG</span> <span style="color:var(--text-faint); margin:0 6px;">|</span> <span class="val" id="discharge_sat_val">--</span><span class="unit">°F SAT</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-airside" class="view">
+            <div class="card theme-green">
+                <div class="card-header" style="font-size: 16px; padding: 16px;">Airflow Diagnostics</div>
+                <div class="card-body" style="padding: 24px;">
+                    <div class="main-metric" style="justify-content: center; margin-bottom: 35px;"><span class="value text-green" id="delta_t" style="font-size: 72px;">--</span><span class="unit" style="font-size: 18px;">°F SPLIT (ΔT)</span></div>
+                    <div class="data-grid">
+                        <div class="data-cell" style="padding: 20px;"><span class="label" style="font-size: 14px;">Return Air DB</span><div><span class="val" id="return_temp" style="font-size: 28px;">--</span><span class="unit" style="font-size: 14px;">°F</span></div></div>
+                        <div class="data-cell" style="padding: 20px;"><span class="label" style="font-size: 14px;">Supply Air DB</span><div><span class="val" id="supply_temp" style="font-size: 28px;">--</span><span class="unit" style="font-size: 14px;">°F</span></div></div>
+                        <div class="data-cell" style="padding: 20px;"><span class="label" style="font-size: 14px;">Space Humidity</span><div><span class="val" id="rh" style="font-size: 28px;">--</span><span class="unit" style="font-size: 14px;">% RH</span></div></div>
+                        <div class="data-cell" style="padding: 20px;"><span class="label" style="font-size: 14px;">Target ΔT</span><div><span class="val" id="target_delta_t" style="font-size: 28px;">--</span><span class="unit" style="font-size: 14px;">°F</span></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-electrical" class="view">
+            <div class="nameplate-banner">
+                <div class="nameplate-item"><span class="nameplate-label">Comp RLA/LRA</span><span class="nameplate-val">24.0 / 143 A</span></div>
+                <div class="nameplate-item"><span class="nameplate-label">Outdoor Fan</span><span class="nameplate-val">1.8 FLA</span></div>
+                <div class="nameplate-item"><span class="nameplate-label">Indoor Blower</span><span class="nameplate-val">4.5 FLA</span></div>
+                <div class="nameplate-item"><span class="nameplate-label">Aux Strips Max</span><span class="nameplate-val">65.0 A</span></div>
+            </div>
+
+            <div class="meter-buttons">
+                <button class="meter-btn active" onclick="setMeterMode('LIVE')">LIVE READ</button>
+                <button class="meter-btn" onclick="setMeterMode('MAX')">MAX HOLD</button>
+                <button class="meter-btn" onclick="setMeterMode('MIN')">MIN HOLD</button>
+                <button class="meter-btn" onclick="setMeterMode('AVG')">RUN AVG</button>
+                <button class="meter-btn-reset" onclick="resetMeterBuffers()">FLUSH</button>
+            </div>
+
+            <div class="card theme-elec">
+                <div class="card-header"><span>Multimeter Stream</span><span id="meter_mode_badge" style="color:var(--accent-yellow);">LIVE READ</span></div>
+                <div class="card-body">
+                    <div class="highlight-row" style="margin-top:0; margin-bottom:15px; border-color:rgba(245,158,11,0.4); background:rgba(245,158,11,0.05);">
+                        <span class="label text-yellow">Total Line Current</span>
+                        <div><span class="val text-yellow" style="font-size:32px;" id="disp_total_amps">0.0</span><span class="unit text-yellow">A</span></div>
+                    </div>
+                    
+                    <div class="data-grid" style="margin-bottom:15px;">
+                        <div class="data-cell"><span class="label">Compressor Amps</span><div><span class="val text-yellow" id="disp_comp_amps">0.0</span><span class="unit">A</span></div></div>
+                        <div class="data-cell"><span class="label">Outdoor Fan Amps</span><div><span class="val" id="disp_od_fan_amps">0.0</span><span class="unit">A</span></div></div>
+                        <div class="data-cell"><span class="label">Indoor Blower Amps</span><div><span class="val" id="disp_id_fan_amps">0.0</span><span class="unit">A</span></div></div>
+                        <div class="data-cell"><span class="label">Heatstrip Draw</span><div><span class="val" id="disp_hs_amps">0.0</span><span class="unit">A</span></div></div>
+                    </div>
+
+                    <div class="data-grid">
+                        <div class="data-cell"><span class="label">Line Voltage</span><div><span class="val">241.5</span><span class="unit">VAC</span></div></div>
+                        <div class="data-cell"><span class="label">Control Voltage</span><div><span class="val" id="disp_control_volts">27.2</span><span class="unit">VAC</span></div></div>
+                        <div class="data-cell" style="grid-column: span 2;"><span class="label text-yellow">Est. System Power Draw</span><div><span class="val text-yellow" id="disp_sys_watts">0</span><span class="unit">WATTS</span></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-report" class="view">
+            <div class="card">
+                <div class="card-header">Diagnosis</div>
+                <div class="card-body">
+                    <select class="tool-select" id="diag_select">
+                        <option value="None">-- Select Diagnosis --</option>
+                        <option value="Normal Operation">System Operating Normally</option>
+                        <optgroup label="Airflow Restrictions">
+                            <option value="Failed Indoor Blower">Failed Indoor Blower Motor</option>
+                            <option value="Failed Condenser Fan">Failed Condenser Fan Motor</option>
+                            <option value="Low Indoor Airflow">Low Indoor Airflow (Dirty Filter/Coil)</option>
+                            <option value="High Indoor Airflow">High Indoor Airflow (Oversized Blower)</option>
+                        </optgroup>
+                        <optgroup label="Refrigeration Circuit">
+                            <option value="Low Refrigerant Charge">Low Refrigerant Charge</option>
+                            <option value="Non-Condensables">Non-Condensables in System</option>
+                            <option value="Stuck Indoor TXV">Stuck Indoor TXV (Open/Hunting)</option>
+                            <option value="Stuck Outdoor TXV">Stuck Outdoor TXV (Closed/Restricted)</option>
+                            <option value="Clogged TXV">Clogged / Restricted TXV Filter</option>
+                            <option value="Clogged Piston">Clogged / Restricted Piston</option>
+                            <option value="Stuck Reversing Valve">Stuck/Failed Reversing Valve (Electrical/Coil)</option>
+                            <option value="RV Bypassing">Reversing Valve Bypassing Internally</option>
+                        </optgroup>
+                        <optgroup label="Mechanical & Electrical">
+                            <option value="Failed Compressor / Overload">Failed Compressor / Thermal Overload</option>
+                            <option value="Compressor Internal Bypass">Compressor Internal Bypass Open</option>
+                            <option value="Inefficient Compressor">Inefficient Compressor (Worn Valves)</option>
+                            <option value="Failed Heat Strip Element">Failed Heat Strip Element</option>
+                            <option value="Defective Sequencer">Defective Sequencer / Relay</option>
+                            <option value="Tripped Safety Limit">Tripped Safety Limit Switch</option>
+                        </optgroup>
+                    </select>
+                    <button class="submit-btn" onclick="submitDiagnosis()">Submit</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-settings" class="view">
+            <div class="card">
+                <div class="card-header">Trainer Connection</div>
+                <div class="card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 20px;">
+                        The app uses WebSockets over WiFi by default. Use this menu to discover and pair with Vesta trainers via Bluetooth.
+                    </p>
+                    <button class="submit-btn" id="btn-scan" style="background: var(--accent-blue);" onclick="scanForTrainers()">Scan for Trainers</button>
+                    <div id="trainer-list" style="margin-top: 20px;">
+                        <div style="text-align: center; color: var(--text-faint); font-size: 11px;">No trainers discovered yet.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<div class="nav-dock">
+    <div class="nav-btn active" onclick="switchView('view-refrigeration', this)"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/><path d="M12 6c-3.31 0-6 2.69-6 6 0 1.66.67 3.16 1.76 4.24l1.42-1.42C8.45 14.1 8 13.1 8 12c0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.1-.45 2.1-1.18 2.82l1.42 1.42C17.33 15.16 18 13.66 18 12c0-3.31-2.69-6-6-6z"/><path d="M12.5 11.5L16 8l-1.5-1.5-3.5 3.5z"/></svg><span class="nav-label">REFRIG</span></div>
+    <div class="nav-btn" onclick="switchView('view-airside', this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 12c0-3 2.5-5.5 5.5-5.5S23 9 23 12h-11zm0 0c3 0 5.5 2.5 5.5 5.5S15 23 12 23V12zm0 0c0 3-2.5 5.5-5.5 5.5S1 15 1 12h11zm0 0c-3 0-5.5-2.5-5.5-5.5S9 1 12 1v11z"/></svg><span class="nav-label">AIRFLOW</span></div>
+    <div class="nav-btn" onclick="switchView('view-electrical', this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><text x="12" y="15.5" font-family="Arial" font-size="10" font-weight="900" text-anchor="middle" fill="currentColor" style="letter-spacing:0px;">AC</text></svg><span class="nav-label">POWER</span></div>
+    <div class="nav-btn" onclick="switchView('view-report', this)"><svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg><span class="nav-label">Submit</span></div>
+</div>
+
+<script>
+    let ws;
+    let activeHost = localStorage.getItem('vesta_engine_host') || window.location.host || "localhost:8000";
+
+    function getTargetHost() {
+        const hostWithPort = window.location.host;
+        if (hostWithPort && hostWithPort.length > 0) {
+            return hostWithPort;
+        }
+        return activeHost;
+    }
+
+    function getApiBaseUrl() {
+        const protocol = window.location.protocol === "https:" ? "https" : "http";
+        return `${protocol}://${getTargetHost()}`;
+    }
+
+    function getWsUrl() {
+        const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${wsProtocol}://${getTargetHost()}/ws`;
+    }
+
+    function sendCommand(topic, value) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ command: topic, value: value, timestamp: Date.now() }));
+        }
+    }
+
+    function logoutUser() { document.cookie = "vesta_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;"; window.location.href = '/student'; }
+    function switchView(viewId, element) {
+        document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(viewId).classList.add('active');
+        if (element && element.classList.contains('nav-btn')) element.classList.add('active');
+
+        // Hide System Ref toolbar on Report and Settings view
+        const toolbar = document.querySelector('.toolbar');
+        if (toolbar) {
+            toolbar.style.display = (viewId === 'view-report' || viewId === 'view-settings') ? 'none' : 'flex';
+        }
+    }
+
+    let meterMode = 'LIVE'; 
+    let meterBuffers = {
+        comp:  { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        odFan: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        idFan: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        hs:    { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        total: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 }
+    };
+
+    function setMeterMode(mode) {
+        meterMode = mode;
+        document.querySelectorAll('.meter-btn').forEach(btn => btn.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        
+        let badge = document.getElementById('meter_mode_badge');
+        if (mode === 'LIVE') badge.textContent = 'LIVE STREAM';
+        if (mode === 'MAX')  badge.textContent = 'PEAK HOLD (MAX)';
+        if (mode === 'MIN')  badge.textContent = 'LOW HOLD (MIN)';
+        if (mode === 'AVG')  badge.textContent = 'RUNNING AVERAGE';
+        
+        renderMeterScreen();
+    }
+
+    function resetMeterBuffers() {
+        for (let k in meterBuffers) {
+            meterBuffers[k].min = Infinity;
+            meterBuffers[k].max = -Infinity;
+            meterBuffers[k].sum = 0;
+            meterBuffers[k].count = 0;
+        }
+        renderMeterScreen();
+    }
+
+    function updateMeterBuffer(key, val) {
+        if (isNaN(val)) return;
+        let b = meterBuffers[key];
+        b.live = val;
+        if (val > b.max) b.max = val;
+        if (val < b.min) b.min = val;
+        b.sum += val;
+        b.count++;
+    }
+
+    function getMeterDisplayVal(key) {
+        let b = meterBuffers[key];
+        if (meterMode === 'LIVE') return b.live.toFixed(1);
+        if (meterMode === 'MAX')  return (b.max === -Infinity) ? "0.0" : b.max.toFixed(1);
+        if (meterMode === 'MIN')  return (b.min === Infinity)  ? "0.0" : b.min.toFixed(1);
+        if (meterMode === 'AVG')  return (b.count === 0)       ? "0.0" : (b.sum / b.count).toFixed(1);
+        return "0.0";
+    }
+
+    function renderMeterScreen() {
+        document.getElementById('disp_comp_amps').textContent   = getMeterDisplayVal('comp');
+        document.getElementById('disp_od_fan_amps').textContent = getMeterDisplayVal('odFan');
+        document.getElementById('disp_id_fan_amps').textContent = getMeterDisplayVal('idFan');
+        document.getElementById('disp_hs_amps').textContent     = getMeterDisplayVal('hs');
+        document.getElementById('disp_total_amps').textContent  = getMeterDisplayVal('total');
+        
+        let renderedTotal = parseFloat(getMeterDisplayVal('total'));
+        let calculatedWatts = Math.round(renderedTotal * 241.5);
+        document.getElementById('disp_sys_watts').textContent = calculatedWatts;
+    }
+
+    const PT_DATA = {
+        'R410A': [ [0, -48], [25, -23], [50, 1], [75, 18], [100, 32], [125, 43], [150, 54], [175, 62], [200, 70], [250, 84], [300, 96], [350, 107], [400, 118], [450, 128], [500, 137], [600, 153] ]
+    };
+    function getSaturationTemp(pressure) {
+        const table = PT_DATA['R410A'];
+        if (pressure <= table[0][0]) return table[0][1];
+        if (pressure >= table[table.length - 1][0]) return table[table.length - 1][1];
+        for (let i = 0; i < table.length - 1; i++) {
+            let p1 = table[i][0], t1 = table[i][1]; let p2 = table[i+1][0], t2 = table[i+1][1];
+            if (pressure >= p1 && pressure <= p2) return t1 + ((pressure - p1) / (p2 - p1)) * (t2 - t1);
+        }
+        return null;
+    }
+
+    function updateDOM(id, val, isDec = false) {
+        let el = document.getElementById(id);
+        if (el) el.textContent = (val === null || isNaN(val)) ? '--' : (isDec ? val.toFixed(1) : Math.round(val));
+    }
+
+    let lastShownDiagnosis = "None";
+    function processTelemetry(data) {
+        if (data.refrigerant) document.getElementById('refrigerant_type').value = data.refrigerant;
+
+        // Handle BLE / WebSocket diagnosis response feedback
+        if (data.diagnosis && data.diagnosis !== lastShownDiagnosis) {
+            lastShownDiagnosis = data.diagnosis;
+            if (data.diagnosis.startsWith("CORRECT:")) {
+                showResultPopup("CORRECT!", "Your diagnosis was correct. The system has been reset.", "success");
+            } else if (data.diagnosis.startsWith("INCORRECT:")) {
+                showResultPopup("INCORRECT", "That is not the correct diagnosis. Please try again. Your score has decreased.", "error");
+            }
+        }
+        document.getElementById('mode_ac').style.display = (data.y_call && data.o_call && !data.is_defrosting) ? 'inline' : 'none';
+        document.getElementById('mode_hp').style.display = (data.y_call && !data.o_call && !data.is_defrosting) ? 'inline' : 'none';
+        
+        document.getElementById('indoor_metering').textContent  = data.indoor_metering || "--";
+        document.getElementById('outdoor_metering').textContent = data.outdoor_metering || "--";
+
+        let lowSat = getSaturationTemp(data.od_low_press);
+        let liquidSat = getSaturationTemp(data.od_liquid_press);
+        let dischargeSat = getSaturationTemp(data.od_high_press);
+        
+        let sh = (lowSat !== null && data.od_suction_temp) ? data.od_suction_temp - lowSat : null;
+        let sc = (liquidSat !== null && data.od_liquid_temp) ? liquidSat - data.od_liquid_temp : null;
+
+        updateDOM('low_press', data.od_low_press); updateDOM('low_sat', lowSat, true);
+        updateDOM('suction_temp', data.od_suction_temp, true); updateDOM('superheat', sh, true);
+        
+        // Fixed Mapping: Decoupled high side target to pull from liquid pressure stream
+        updateDOM('liquid_press', data.od_liquid_press); updateDOM('high_sat', liquidSat, true);
+        updateDOM('liquid_temp', data.od_liquid_temp, true); updateDOM('subcool', sc, true);
+
+        updateDOM('id_suction_temp', data.id_suction_temp, true);
+        updateDOM('id_liquid_temp', data.id_liquid_temp, true);
+        updateDOM('od_ambient', data.od_ambient, true);
+
+        let isHeat = (data.y_call && !data.o_call && !data.is_defrosting);
+        let heatRow = document.getElementById('heat_discharge_row');
+        if (heatRow) {
+            heatRow.style.display = isHeat ? 'flex' : 'none';
+            if (isHeat) {
+                updateDOM('discharge_press_val', data.od_high_press);
+                updateDOM('discharge_sat_val', dischargeSat, true);
+            }
+        }
+
+        let dt = (data.id_return_temp && data.id_supply_temp) ? Math.abs(data.id_return_temp - data.id_supply_temp) : null;
+        updateDOM('return_temp', data.id_return_temp, true); updateDOM('supply_temp', data.id_supply_temp, true);
+        updateDOM('delta_t', dt, true); updateDOM('rh', data.id_rh, true);
+        updateDOM('target_delta_t', data.id_rh ? 20.0 - ((data.id_rh - 50.0) / 5.0) : null, true);
+
+        let cAmps = parseFloat(data.comp_amps)   || 0.0;
+        let oAmps = parseFloat(data.od_fan_amps) || 0.0;
+        let iAmps = parseFloat(data.id_fan_amps) || 0.0;
+        let hAmps = parseFloat(data.hs_amps)     || 0.0;
+        let tAmps = cAmps + oAmps + iAmps + hAmps;
+
+        updateMeterBuffer('comp', cAmps);
+        updateMeterBuffer('odFan', oAmps);
+        updateMeterBuffer('idFan', iAmps);
+        updateMeterBuffer('hs', hAmps);
+        updateMeterBuffer('total', tAmps);
+
+        let ctrlV = (data.lps_open || data.hps_open) ? 0.0 : 27.2 + (Math.random() * 0.3);
+        document.getElementById('disp_control_volts').textContent = ctrlV.toFixed(1);
+
+        renderMeterScreen();
+    }
+
+    function submitDiagnosis() {
+        let a = document.getElementById('diag_select').value;
+        if (a === "None") return alert("Select root cause.");
+
+        if (window.isBleConnected && window.connectedDeviceId) {
+            const BleClient = (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.BleClient) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BleClient);
+            if (BleClient) {
+                let SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+                let RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+                BleClient.getServices(window.connectedDeviceId)
+                .then(services => {
+                    const hasNordic = services.some(s => s.uuid.toLowerCase() === SERVICE_UUID);
+                    if (!hasNordic) {
+                        SERVICE_UUID = "12a59900-173d-465c-914a-7a49c32c4438";
+                        RX_CHAR_UUID = "12a59902-173d-465c-914a-7a49c32c4438";
+                    }
+
+                    // Write diagnosis command JSON to the RX characteristic over BLE
+                    const payload = JSON.stringify({ diagnosis: a });
+                    let dataView;
+                    if (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.textToDataView) {
+                        dataView = window.capacitorCommunityBluetoothLe.textToDataView(payload);
+                    } else {
+                        let bytes;
+                        if (typeof TextEncoder !== "undefined") {
+                            bytes = new TextEncoder().encode(payload);
+                        } else {
+                            bytes = new Uint8Array(payload.length);
+                            for (let i = 0; i < payload.length; i++) {
+                                bytes[i] = payload.charCodeAt(i);
+                            }
+                        }
+                        dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                    }
+
+                    return BleClient.write(window.connectedDeviceId, SERVICE_UUID, RX_CHAR_UUID, dataView);
+                })
+                .then(() => {
+                    console.log("Diagnosis submitted successfully over BLE!");
+                })
+                .catch(err => {
+                    alert("Failed to submit over Bluetooth: " + err.message);
+                });
+                return;
+            }
+        }
+
+        fetch(`${getApiBaseUrl()}/api/submit?diagnosis=${encodeURIComponent(a)}`, {method:'POST'})
+        .then(r => r.text())
+        .then(text => {
+            if (text === "CORRECT") {
+                showResultPopup("CORRECT!", "Your diagnosis was correct. The system has been reset.", "success");
+            } else if (text === "INCORRECT") {
+                showResultPopup("INCORRECT", "That is not the correct diagnosis. Please try again. Your score has decreased.", "error");
+            } else {
+                alert("Transmitted Securely.");
+            }
+        });
+    }
+
+    function showResultPopup(title, message, type) {
+        let overlay = document.getElementById('result-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'result-overlay';
+            overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s;';
+            
+            let card = document.createElement('div');
+            card.id = 'result-card';
+            card.style.cssText = 'background: var(--bg-card); border-radius: 16px; border: 2px solid var(--border-color); padding: 35px; text-align: center; width: 90%; max-width: 400px; transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 40px rgba(0,0,0,0.6);';
+            
+            let icon = document.createElement('div');
+            icon.id = 'result-icon';
+            icon.style.cssText = 'font-size: 50px; margin-bottom: 15px; line-height: 1;';
+            
+            let h2 = document.createElement('h2');
+            h2.id = 'result-title';
+            h2.style.cssText = 'margin-top: 0; font-size: 26px; font-weight: 800; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;';
+            
+            let p = document.createElement('p');
+            p.id = 'result-message';
+            p.style.cssText = 'color: var(--text-muted); font-size: 14px; margin-bottom: 25px; line-height: 1.5;';
+            
+            let btn = document.createElement('button');
+            btn.textContent = 'CONTINUE';
+            btn.className = 'submit-btn';
+            btn.style.marginTop = '0';
+            btn.onclick = function() {
+                overlay.style.opacity = '0';
+                document.getElementById('result-card').style.transform = 'scale(0.9)';
+                setTimeout(() => { overlay.style.display = 'none'; }, 300);
+            };
+            
+            card.appendChild(icon);
+            card.appendChild(h2);
+            card.appendChild(p);
+            card.appendChild(btn);
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+        }
+        
+        document.getElementById('result-title').textContent = title;
+        document.getElementById('result-message').textContent = message;
+        
+        let card = document.getElementById('result-card');
+        let icon = document.getElementById('result-icon');
+        if (type === 'success') {
+            card.style.borderColor = 'rgba(16, 185, 129, 0.6)';
+            document.getElementById('result-title').style.color = 'var(--accent-green)';
+            card.style.boxShadow = '0 0 40px rgba(16, 185, 129, 0.2)';
+            icon.textContent = '✅';
+        } else {
+            card.style.borderColor = 'rgba(239, 68, 68, 0.6)';
+            document.getElementById('result-title').style.color = 'var(--accent-red)';
+            card.style.boxShadow = '0 0 40px rgba(239, 68, 68, 0.2)';
+            icon.textContent = '❌';
+        }
+        
+        overlay.style.display = 'flex';
+        setTimeout(() => {
+            overlay.style.opacity = '1';
+            card.style.transform = 'scale(1)';
+        }, 10);
+    }
+
+    function attemptLogin(type) {
+        let u = document.getElementById('login_user').value.trim();
+        let p = document.getElementById('login_pass').value.trim();
+        fetch(`${getApiBaseUrl()}/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${type}`).then(r => {
+            if(r.ok) { document.cookie="vesta_auth=student; path=/"; document.getElementById('login-overlay').style.display='none'; }
+            else document.getElementById('login_error').style.display='block';
+        });
+    }
+    function bypassLogin() {
+        document.cookie = "vesta_auth=guest; path=/";
+        document.getElementById('login-overlay').style.display='none';
+    }
+
+    async function scanForTrainers() {
+        try {
+            if (!window.Capacitor) {
+                throw new Error("Capacitor is not loaded. If you are viewing this in a standard web browser, Bluetooth is only supported when running as a native app on a mobile device.");
+            }
+
+            const BleClient = (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.BleClient) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BleClient);
+            if (!BleClient) {
+                throw new Error("The Bluetooth LE plugin was not bundled. Please make sure you sync your native project.");
+            }
+
+            await BleClient.initialize();
+            const list = document.getElementById('trainer-list');
+            list.innerHTML = '<div style="text-align: center; color: var(--accent-blue);">Scanning for Vesta trainers...</div>';
+
+            const discovered = [];
+            await BleClient.requestLEScan({}, (result) => {
+                const name = result.device.name || result.localName;
+                const hasVestaService = result.uuids && result.uuids.some(uuid => {
+                    const lUuid = uuid.toLowerCase();
+                    return lUuid === "6e400001-b5a3-f393-e0a9-e50e24dcca9e" || lUuid === "12a59900-173d-465c-914a-7a49c32c4438";
+                });
+                const matchesName = name && (
+                    name.toLowerCase().includes("vesta core hp trainer") ||
+                    name.toLowerCase().includes("comfortsc")
+                );
+                if (matchesName || hasVestaService) {
+                    if (!discovered.find(d => d.deviceId === result.device.deviceId)) {
+                        if (!result.device.name) {
+                            result.device.name = name || "Vesta Core HP trainer";
+                        }
+                        discovered.push(result.device);
+                        renderTrainerList(discovered);
+                    }
+                }
+            });
+
+            setTimeout(async () => {
+                await BleClient.stopLEScan();
+                if (discovered.length === 0) {
+                    list.innerHTML = '<div style="text-align: center; color: var(--text-faint);">No Vesta trainers found nearby.</div>';
+                }
+            }, 5000);
+        } catch (err) {
+            alert("Bluetooth Error: " + err.message);
+        }
+    }
+
+    function renderTrainerList(devices) {
+        const list = document.getElementById('trainer-list');
+        list.innerHTML = devices.map(d => `
+            <div class="trainer-item">
+                <div>
+                    <div class="trainer-name">${d.name}</div>
+                    <div class="trainer-id">${d.deviceId}</div>
+                </div>
+                <button class="connect-btn" onclick="connectToTrainer('${d.deviceId}')">Connect</button>
+            </div>
+        `).join('');
+    }
+
+    function handleBleTelemetry(bleData) {
+        const data = {
+            refrigerant: bleData.ref || "R410A",
+            y_call: bleData.ca > 1.0,
+            o_call: bleData.oa > 0.1,
+            is_defrosting: false,
+            indoor_metering: "TXV",
+            outdoor_metering: "TXV",
+            od_low_press: bleData.lp,
+            od_liquid_press: bleData.hp,
+            od_high_press: bleData.hp,
+            od_suction_temp: bleData.st,
+            od_liquid_temp: bleData.lt,
+            id_suction_temp: bleData.st + 1.2,
+            id_liquid_temp: bleData.lt - 1.2,
+            od_ambient: 90.0,
+            id_return_temp: 75.0,
+            id_supply_temp: 75.0 - bleData.dt,
+            id_rh: 50.0,
+            comp_amps: bleData.ca,
+            od_fan_amps: bleData.oa,
+            id_fan_amps: bleData.ia,
+            hs_amps: bleData.ha
+        };
+        processTelemetry(data);
+    }
+
+    async function disconnectTrainer(deviceId) {
+        try {
+            const BleClient = (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.BleClient) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BleClient);
+            if (BleClient) {
+                await BleClient.disconnect(deviceId);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function connectToTrainer(deviceId) {
+        try {
+            const BleClient = (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.BleClient) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BleClient);
+            if (!BleClient) {
+                alert("BleClient is not available.");
+                return;
+            }
+
+            const list = document.getElementById('trainer-list');
+            list.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${deviceId}...</div>`;
+
+            await BleClient.connect(deviceId, (disconnectedId) => {
+                alert("Trainer Disconnected: " + disconnectedId);
+                window.isBleConnected = false;
+                document.getElementById('trainer-list').innerHTML = '<div style="text-align: center; color: var(--text-faint);">Disconnected from trainer. Click Scan to reconnect.</div>';
+                document.getElementById('ws-status').classList.remove('live');
+                setTimeout(initWS, 1000);
+            });
+
+            list.innerHTML = `<div style="text-align: center; color: var(--accent-green);">Connected! Discovering services...</div>`;
+
+            // On Android/iOS, you MUST discover services before subscribing to notifications!
+            await BleClient.discoverServices(deviceId);
+
+            list.innerHTML = `<div style="text-align: center; color: var(--accent-green);">Setting up data stream...</div>`;
+
+            let SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+            let CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+            try {
+                const services = await BleClient.getServices(deviceId);
+                const hasNordic = services.some(s => s.uuid.toLowerCase() === SERVICE_UUID);
+                if (!hasNordic) {
+                    SERVICE_UUID = "12a59900-173d-465c-914a-7a49c32c4438";
+                    CHAR_UUID = "12a59901-173d-465c-914a-7a49c32c4438";
+                }
+            } catch (err) {
+                console.warn("Failed to query services, using defaults:", err);
+            }
+
+            let bleBuffer = "";
+            await BleClient.startNotifications(deviceId, SERVICE_UUID, CHAR_UUID, (value) => {
+                let str = "";
+                try {
+                    if (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.dataViewToText) {
+                        str = window.capacitorCommunityBluetoothLe.dataViewToText(value);
+                    } else {
+                        str = String.fromCharCode.apply(null, new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+                    }
+
+                    bleBuffer += str;
+
+                    if (!bleBuffer.startsWith("{")) {
+                        const index = bleBuffer.indexOf("{");
+                        if (index !== -1) {
+                            bleBuffer = bleBuffer.substring(index);
+                        } else {
+                            bleBuffer = "";
+                            return;
+                        }
+                    }
+
+                    const trimmed = bleBuffer.replace(/\0/g, '').trim();
+                    if (trimmed.endsWith("}")) {
+                        try {
+                            const data = JSON.parse(trimmed);
+                            bleBuffer = ""; // Reset buffer
+                            if (data.lp !== undefined) {
+                                handleBleTelemetry(data);
+                            } else {
+                                processTelemetry(data);
+                            }
+                        } catch (parseError) {
+                            // JSON incomplete, continue accumulating
+                        }
+                    }
+                } catch (e) {
+                    console.error("BLE Notification Error:", e);
+                }
+            });
+
+            list.innerHTML = `
+                <div style="text-align: center; color: var(--accent-green); padding: 10px; border: 1px solid var(--accent-green); border-radius: 8px; margin-bottom: 10px;">
+                    <div style="font-weight: bold;">🟢 Connected to Trainer</div>
+                    <div style="font-size: 11px; opacity: 0.7; margin-bottom: 8px;">Device ID: ${deviceId}</div>
+                    <button class="connect-btn" style="background: var(--accent-red); margin-top: 5px; width: 100%; border-radius: 6px; padding: 8px; color: white; border: none; font-weight: bold;" onclick="disconnectTrainer('${deviceId}')">Disconnect</button>
+                </div>
+            `;
+
+            window.connectedDeviceId = deviceId;
+            window.isBleConnected = true;
+            if (ws) {
+                try { ws.close(); } catch(e) {}
+            }
+
+            let splash = document.getElementById('splash-overlay');
+            if (splash) splash.classList.add('hidden');
+
+            document.getElementById('ws-status').classList.add('live');
+
+        } catch (error) {
+            alert("Connection Error: " + error.message);
+            scanForTrainers();
+        }
+    }
+
+    function initWS() {
+        const wsUrl = getWsUrl();
+        console.log(`Connecting to Vesta Core Bus at: ${wsUrl}`);
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+            document.getElementById('ws-status').classList.add('live');
+            let splash = document.getElementById('splash-overlay');
+            if (splash) splash.classList.add('hidden');
+        };
+        
+        ws.onclose = () => { 
+            if (!window.isBleConnected) {
+                document.getElementById('ws-status').classList.remove('live');
+                setTimeout(initWS, 2000);
+            }
+        };
+        
+        ws.onmessage = e => {
+            try {
+                processTelemetry(JSON.parse(e.data));
+            } catch (parseError) {
+                console.error("WebSocket payload parse error:", parseError, e.data);
+            }
+        };
+    }
+    window.addEventListener('load', initWS);
+    window.addEventListener('load', () => {
+        setTimeout(() => { document.getElementById('splash-overlay').style.display='none'; }, 1500);
+        document.getElementById('refrigerant_type').addEventListener('change', (e) => {
+            sendCommand('set_refrigerant', e.target.value);
+        });
+        document.getElementById('diag_select').addEventListener('change', () => {
+            lastShownDiagnosis = "None";
+        });
+
+        // Pull to Refresh Logic
+        let startY = 0;
+        let pulling = false;
+        const viewport = document.getElementById('viewport');
+        const indicator = document.getElementById('pull-indicator');
+        const svg = document.getElementById('refresh-svg');
+
+        viewport.addEventListener('touchstart', e => {
+            if (viewport.scrollTop <= 0) {
+                startY = e.touches[0].pageY;
+                pulling = true;
+            }
+        }, { passive: true });
+
+        viewport.addEventListener('touchmove', e => {
+            if (!pulling) return;
+            const y = e.touches[0].pageY;
+            const diff = y - startY;
+            if (diff > 0 && viewport.scrollTop <= 0) {
+                const translate = Math.min(diff / 2.5, 80);
+                indicator.style.transform = `translateY(${translate}px)`;
+                svg.style.transform = `rotate(${diff * 2}deg)`;
+                if (translate >= 65) {
+                    indicator.querySelector('.refresh-circle').style.borderColor = 'var(--accent-green)';
+                    indicator.querySelector('.refresh-circle').style.color = 'var(--accent-green)';
+                } else {
+                    indicator.querySelector('.refresh-circle').style.borderColor = 'var(--accent-blue)';
+                    indicator.querySelector('.refresh-circle').style.color = 'var(--accent-blue)';
+                }
+            } else {
+                pulling = false;
+            }
+        }, { passive: true });
+
+        viewport.addEventListener('touchend', e => {
+            if (!pulling) return;
+            pulling = false;
+            const transform = indicator.style.transform;
+            const translate = transform ? parseFloat(transform.replace('translateY(', '').replace('px)', '')) : 0;
+
+            if (translate >= 65) {
+                svg.style.animation = 'spin 0.6s linear infinite';
+
+                // Soft Refresh: Close connection and clear data without page reload
+                if (ws) ws.close(); // Triggers automatic reconnect loop
+                resetMeterBuffers();
+
+                // Clear UI values to show refresh is happening
+                document.querySelectorAll('.val').forEach(el => {
+                    if (el.id !== 'ws-status') el.textContent = '--';
+                });
+
+                setTimeout(() => {
+                    indicator.style.transform = 'translateY(0)';
+                    setTimeout(() => { svg.style.animation = ''; }, 300);
+                }, 1000);
+            } else {
+                indicator.style.transform = 'translateY(0)';
+            }
+        });
+    });
+</script>
+</body>
+</html>

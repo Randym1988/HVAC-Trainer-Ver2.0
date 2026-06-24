@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  engine:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - FRONTEND_URL=http://localhost:8080
+      - EDGE_REQUIRED=true
+    restart: unless-stopped
+
+  frontend:
+    build: 
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - engine
+    restart: unless-stopped

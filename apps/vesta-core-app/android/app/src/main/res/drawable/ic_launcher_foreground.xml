@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108">
+    <!-- Centered and Scaled Vesta Symbol -->
+    <!-- Original points were roughly 25-82. Scaled to be slightly larger and centered. -->
+    <path
+        android:pathData="M30,35 L54,80"
+        android:strokeColor="#0ea5e9"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M78,35 L54,80"
+        android:strokeColor="#ef4444"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,80a4,4 0,1 0,8 0a4,4 0,1 0,-8 0"/>
+</vector>

@@ -1,0 +1,74 @@
+AC-GAS FURNACE RELAY ID MAP
+Source: firmware/src/main.cpp (/api/toggle handler)
+
+======================================================
+API RELAY IDS (use with /api/toggle?id=<relay_id>&state=<0|1>)
+======================================================
+relay_inducer             -> board_2 pin 0   -> Inducer motor relay
+relay_igniter             -> board_2 pin 1   -> Hot surface igniter relay
+relay_gas_valve           -> board_2 pin 2   -> Gas valve relay
+relay_heat_blower         -> board_2 pin 3   -> Indoor heat blower relay
+relay_compressor_motor    -> board_2 pin 8   -> Compressor motor relay
+relay_compressor_contactor-> board_2 pin 9   -> Compressor contactor relay
+relay_condenser_y         -> board_2 pin 11  -> Condenser Y-path relay
+relay_y_wire_interlock    -> board_2 pin 12  -> Y-wire interlock relay
+relay_rollout_limit_1     -> board_1 pin 7   -> Rollout limit 1 (maps to f33)
+relay_rollout_limit_2     -> board_1 pin 11  -> Rollout limit 2 (maps to f34)
+relay_high_temp_limit     -> board_1 pin 6   -> High temp limit (maps to f22)
+relay_flame_sensor        -> board_1 pin 3   -> Flame sensor fault line (maps to f32)
+relay_condenser_fan       -> board_3 pin 5   -> Condenser fan fault line (maps to f6)
+relay_low_pressure_switch -> board_3 pin 6   -> Low pressure switch (maps to f7)
+relay_high_pressure_switch -> board_3 pin 7  -> High pressure switch (maps to f8)
+relay_vacuum_pressure_switch -> board_1 pin 4 -> Vacuum pressure switch (maps to f16)
+relay_pressure_switch_closed -> board_1 pin 5 -> Pressure switch stuck closed (maps to f19)
+relay_inducer_open        -> board_1 pin 0   -> Inducer open fault (maps to f15)
+relay_igniter_open        -> board_1 pin 1   -> Igniter open fault (maps to f18)
+relay_gas_valve_closed    -> board_1 pin 2   -> Gas valve closed fault (maps to f21)
+relay_gas_valve_open      -> board_1 pin 9   -> Gas valve open fault (maps to f20)
+relay_draft_safeguard     -> board_1 pin 8   -> Draft safeguard fault (maps to f17)
+relay_blocked_flue        -> board_1 pin 10  -> Blocked flue fault (maps to f23)
+relay_indoor_fan_off      -> board_1 pin 12  -> Indoor fan off fault (maps to f24)
+relay_indoor_fan_on       -> board_1 pin 13  -> Indoor fan on fault (maps to f25)
+relay_shorted_contactor   -> board_2 pin 13  -> Shorted contactor fault (maps to f30)
+relay_comp_limit_open     -> board_2 pin 14  -> Compressor limit open fault (maps to f31)
+relay_low_pressure_board_fault -> board_3 pin 14 -> Broken LPS board fault (maps to f26)
+relay_high_pressure_board_fault -> board_3 pin 15 -> Broken HPS board fault (maps to f27)
+relay_failed_gas_relay    -> board_1 pin 11  -> Failed gas relay fault (maps to f34)
+relay_a2l_sensor          -> board_1 pin 14  -> A2L sensor (maps to f28)
+relay_a2l_board_fault     -> board_1 pin 15  -> A2L board fault (maps to f29)
+relay_failed_gas_valve    -> board_1 pin 2   -> Failed gas valve (maps to f21)
+relay_faulty_high_temp_limit -> board_1 pin 6 -> Faulty high temp limit (maps to f22)
+relay_grounded_w_wire     -> simulation channel -> Grounded W wire (maps to f52)
+relay_shorted_y_to_r      -> simulation channel -> Shorted Y to R (maps to f51)
+relay_shorted_w_to_r      -> simulation channel -> Shorted W to R (maps to f53)
+relay_draft_inducer_board_fault -> board_1 pin 8 -> Draft inducer board fault (maps to f17)
+relay_shorted_ignition_board -> board_1 pin 1 -> Shorted ignition board (maps to f18)
+relay_faulty_a2l_sensor   -> board_1 pin 14  -> Faulty A2L sensor (maps to f28)
+relay_faulty_a2l_board    -> board_1 pin 15  -> Faulty A2L board (maps to f29)
+relay_open_contactor_coil -> board_2 pin 14  -> Open contactor coil (maps to f31)
+relay_shorted_contactor_coil -> simulation channel -> Shorted contactor coil (maps to f54)
+
+======================================================
+STATE CONVENTION
+======================================================
+state=1 => energize command (firmware writes LOW for relay outputs)
+state=0 => de-energize command (firmware writes HIGH for relay outputs)
+
+NO/NC CONTACT BEHAVIOR (FOR EACH PHYSICAL RELAY)
+- state=1 (coil energized): COM->NO closes, COM->NC opens
+- state=0 (coil de-energized): COM->NO opens, COM->NC closes
+- If a field circuit is currently wired on NC, expected field behavior is inverted relative to NO wiring.
+- Verify board silkscreen and terminal labeling for each installed relay module before commissioning.
+
+======================================================
+ALIAS COVERAGE (FURNACE FAULT IDS)
+======================================================
+Covered via relay_* aliases: f6, f7, f8, f15, f16, f17, f18, f19, f20, f21, f22,
+f23, f24, f25, f26, f27, f28, f29, f30, f31, f32, f33, f34
+
+Notes:
+- This file is furnace-specific (trainers/ac-gas-furnace).
+- New relay_* entries above are aliases that reuse existing f* hardware lines.
+- Efficiency pattern: use relay_* aliases for instructor controls and keep f* IDs for diagnostic/fault simulation workflows.
+- Shared line caveat: relay_rollout_limit_2 and relay_failed_gas_relay currently target the same physical line (f34 / board_1 pin 11) on this hardware profile.
+- Independent-channel note: relay_grounded_w_wire, relay_shorted_y_to_r, relay_shorted_w_to_r, and relay_shorted_contactor_coil now use independent simulation channels (f52/f51/f53/f54).

@@ -1,0 +1,59 @@
+======================================================
+BOARD 1: INDOOR FAULTS (I2C Address 0x20)
+======================================================
+Pin 0  - [f15] Heatstrip 1 - Broken Element
+Pin 1  - [f18] Heatstrip 1 - Primary Limit (Open)
+Pin 2  - [f21] Heatstrip 1 - Secondary Limit (Open)
+Pin 3  - [f32] Heatstrip 1 - Sequencer Fault
+Pin 4  - [f16] Heatstrip 2 - Broken Element
+Pin 5  - [f19] Heatstrip 2 - Primary Limit (Open)
+Pin 6  - [f22] Heatstrip 2 - Secondary Limit (Open)
+Pin 7  - [f33] Heatstrip 2 - Sequencer Fault
+Pin 8  - [f17] Heatstrip 3 - Broken Element
+Pin 9  - [f20] Heatstrip 3 - Primary Limit (Open)
+Pin 10 - [f23] Heatstrip 3 - Secondary Limit (Open)
+Pin 11 - [f34] Heatstrip 3 - Sequencer Fault
+Pin 12 - [f24] Indoor Fan OFF
+Pin 13 - [f25] Indoor Fan ON (Stuck Relay)
+Pin 14 - [f28] A2L Sensor Tripped
+Pin 15 - [f29] Stuck A2L Board
+
+======================================================
+BOARD 2: HARDWARE RELAYS (I2C Address 0x21)
+======================================================
+Pin 0  - [hs1_t1] Heatstrip 1 - Tier 1
+Pin 1  - [hs1_t2] Heatstrip 1 - Tier 2
+Pin 2  - [hs1_t3] Heatstrip 1 - Tier 3
+Pin 3  - [hs2_t1] Heatstrip 2 - Tier 1
+Pin 4  - [hs2_t2] Heatstrip 2 - Tier 2
+Pin 5  - [hs2_t3] Heatstrip 2 - Tier 3
+Pin 6  - [hs3_t1] Heatstrip 3 - Tier 1
+Pin 7  - [hs3_t2] Heatstrip 3 - Tier 2
+Pin 8  - [relay_compressor_motor] Compressor Motor
+Pin 9  - [relay_compressor_contactor] Compressor Contactor
+Pin 10 - [relay_reversing_valve] Reversing Valve
+Pin 11 - [relay_condenser_y] Condenser Y-Path
+Pin 12 - [relay_y_wire_interlock] Y-Wire Interlock
+Pin 13 - [f30] Shorted Contactor (Fault)
+Pin 14 - [f31] Compressor Limit Open (Fault)
+Pin 15 - SPARE PIN
+
+======================================================
+BOARD 3: OUTDOOR FAULTS (I2C Address 0x22)
+======================================================
+Pin 0  - [f1]  R-O Condenser (Broken Wire)
+Pin 1  - [f2]  R-Y Condenser (Broken Wire)
+Pin 2  - [f3]  R-C Condenser (Broken Wire)
+Pin 3  - [f4]  R-C Board (Broken Wire)
+Pin 4  - [f5]  R-R Condenser (Broken Wire)
+Pin 5  - [f6]  OD Fan Failure
+Pin 6  - [f7]  Low Pressure Sw (Open)
+Pin 7  - [f8]  High Pressure Sw (Open)
+Pin 8  - [f9]  Defrost Sensor (Open)
+Pin 9  - [f10] OD Fan Defrost (Failed Relay)
+Pin 10 - [f11] Grounded HPS
+Pin 11 - [f12] Rev Valve Coil (Open)
+Pin 12 - [f13] W Defrost (Broken Wire)
+Pin 13 - [f14] R-W Condenser (Broken Wire)
+Pin 14 - [f26] Broken LPS Board Trace
+Pin 15 - [f27] Broken HPS Board Trace

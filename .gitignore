@@ -1,0 +1,25 @@
+﻿# Python
+__pycache__/
+*.pyc
+
+# PlatformIO
+**/.pio/
+**/.vscode/
+
+# Node / Capacitor
+**/node_modules/
+**/dist/
+
+# Android/iOS build outputs
+**/android/.gradle/
+**/android/app/build/
+**/ios/DerivedData/
+
+# Logs and env
+*.log
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
