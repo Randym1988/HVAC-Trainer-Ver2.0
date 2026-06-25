@@ -1,12 +1,15 @@
 # HVAC Trainer Ver2.0
 
-Monorepo for the Vesta HVAC trainer platform.
+Integrated repository for the Vesta HVAC trainer platform, combining trainer firmware, local engine services, web interfaces, and supporting documentation in one workspace.
 
-This workspace contains:
-- ESP32-S3 firmware for furnace and heat-pump trainers
-- Docker-based trainer engine backend/frontend
-- web instructor/student interfaces
-- supporting docs and tools
+## Overview
+
+This repository supports two primary trainer targets:
+
+- AC + gas furnace trainer
+- Heat-pump trainer
+
+The platform is designed to keep hardware behavior, simulation logic, and instructor/student tooling aligned during development and field updates.
 
 ## Repository Layout
 
@@ -14,57 +17,93 @@ This workspace contains:
 HVAC Trainer Ver2.0/
 |- platform/
 |  |- docker-engine/
-|     |- backend/
-|     |- frontend/
-|     |- mosquitto/
-|     |- web/
-|     \- docker-compose.yml
+|  |  |- backend/               # FastAPI engine and simulation bridge
+|  |  |- frontend/              # Nginx/static frontend container assets
+|  |  |- mosquitto/             # MQTT broker config
+|  |  |- web/                   # Instructor/student web pages
+|  |  \- docker-compose.yml
 |- trainers/
 |  |- ac-gas-furnace/
 |  |  |- docs/
-|  |  \- firmware/
+|  |  \- firmware/              # PlatformIO project (ESP32-S3)
 |  \- heat-pump/
 |     |- docs/
-|     \- firmware/
+|     \- firmware/              # PlatformIO project (ESP32-S3)
 |- apps/
 |  \- vesta-core-app/
 |- docs/
 \- tools/
 ```
 
-## Core Workflows
+## Architecture Summary
 
-### Start Engine Stack
+```mermaid
+flowchart LR
+  FURNACE[Furnace Firmware] --> ENGINE[Docker Engine API]
+  HEATPUMP[Heat Pump Firmware] --> ENGINE
+  ENGINE --> INSTR[Instructor UI]
+  ENGINE --> STUD[Student UI]
+  ENGINE <--> MQTT[Mosquitto]
+```
+
+## Prerequisites
+
+- Docker Desktop (or Docker Engine with Compose plugin)
+- Python 3.11+ for local backend development
+- PlatformIO CLI or VS Code PlatformIO extension
+- ESP32-S3 board and USB connection for firmware upload
+
+## Quick Start
+
+### Start engine stack
 
 ```bash
 cd "platform/docker-engine"
 docker compose up -d --build
 ```
 
-Engine API: `http://localhost:8000`
-
-### Flash Furnace Firmware
-
-```bash
-cd "trainers/ac-gas-furnace/firmware"
-pio run -e usb -t upload
-```
-
-### Flash Heat-Pump Firmware
-
-```bash
-cd "trainers/heat-pump/firmware"
-pio run -e usb -t upload
-```
-
-### Live Status Check
+### Verify API
 
 ```bash
 curl http://localhost:8000/api/status
 ```
 
-## Current Notes
+## Firmware Workflows
 
-- Heat-pump thermostat call reporting is decoupled from I2C relay board presence.
-- Docker engine backend uses `aiomqtt` and reconnect logic for bridge stability.
-- Heat-pump backend simulation includes dedicated heating-mode pressure dynamics.
+### Furnace firmware
+
+```bash
+cd "trainers/ac-gas-furnace/firmware"
+pio run -e usb
+pio run -e usb -t upload
+```
+
+### Heat-pump firmware
+
+```bash
+cd "trainers/heat-pump/firmware"
+pio run -e usb
+pio run -e usb -t upload
+```
+
+## Operational Notes
+
+- Trainer telemetry and call states are consumed by the engine from edge heartbeats.
+- Heat-pump thermostat call polling is designed to keep telemetry active even when relay boards are unavailable.
+- HPS/LPS status can reflect physical pressure trips and explicit fault simulation flags.
+
+## Development Practices
+
+- Keep trainer-specific logic inside the corresponding trainer directory.
+- Update documentation when behavior, wiring assumptions, or API payloads change.
+- Validate firmware upload and API visibility together as part of every hardware-facing change.
+
+## Troubleshooting
+
+- If a board uploads but does not report, check edge discovery and engine endpoint settings.
+- If API is up but no trainer is selected, inspect `GET /api/edges` and heartbeat freshness.
+- If thermostat calls appear wrong, validate call pins, debounce behavior, and relay board presence.
+
+## License
+
+Proprietary project for Mitchell Media Vesta trainer platforms unless otherwise specified.
