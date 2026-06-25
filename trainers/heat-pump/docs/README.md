@@ -1,58 +1,31 @@
-# Vesta Core HVAC Trainer Firmware (ESP32-S3 Build) ❄️🔥
+# Heat-Pump Trainer Firmware
 
-This repository contains the **ESP32-S3 optimized** PlatformIO firmware for the **Vesta Core HVAC Trainer**. This code simulates a complete residential HVAC system, including refrigeration physics, electrical load dynamics, and fault injection capabilities.
+This folder contains the heat-pump trainer firmware (ESP32-S3, PlatformIO).
 
-This build is specifically tailored to leverage the hardware features of the ESP32-S3, providing a dual-interface for student interaction: a real-time web dashboard served over **Wi-Fi**, and a telemetry stream over **Bluetooth Low Energy (BLE)** for the native Android diagnostic app.
+## Scope
 
----
+- Heat-pump control and thermostat call handling
+- Refrigerant and electrical telemetry simulation
+- fault/simulation injection logic
+- BLE + web + engine heartbeat integration
 
-## 🚀 S3-Specific Optimizations
+## Current Runtime Notes
 
-*   **Dual Core Architecture**: Ready to be expanded to leverage the dual-core architecture of the S3 for separating the physics engine from the web/BLE communication stack.
-*   **Native USB-CDC**: Includes `build_flags` for enabling the native USB serial monitor on the S3 for faster debugging.
-*   **Modern BLE Stack**: Utilizes the updated NimBLE library fully compatible with the ESP32-S3's Bluetooth 5 (LE) radio.
+- Thermostat call polling runs even when I2C relay boards are not detected.
+- Control and comm loops support dual-core split with single-loop fallback.
+- Heating mode pressure behavior is expected to track ambient changes when compressor is running.
 
----
+## Build and Flash
 
-## 📁 Repository Layout
-
-```text
-├── src/
-│   └── main.cpp      # Main application logic, physics engine, and server setup
-├── data/
-│   ├── index.html    # Student web portal (served via web server)
-│   └── student.html  # Deprecated/old student portal
-├── lib/              # Project-specific libraries
-├── include/          # Project header files
-├── platformio.ini    # PlatformIO project configuration for ESP32-S3
-└── partitions.csv    # ESP32 flash partition layout
+```bash
+cd "trainers/heat-pump/firmware"
+pio run -e usb
+pio run -e usb -t upload
 ```
 
----
+## Validation Checklist
 
-## 🛠️ Installation & Setup
-
-### Prerequisites
-*   **Visual Studio Code** with the **PlatformIO IDE** extension.
-*   An **ESP32-S3** development board.
-
-### Setup Instructions
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/Randym1988/HVAC-trainer-S3-Build.git
-    ```
-
-2.  **Open in PlatformIO:**
-    *   Open Visual Studio Code.
-    *   Click the **PlatformIO icon** on the left sidebar.
-    *   Click **Open Project** and select the cloned `HVAC-trainer-S3-Build` folder.
-
-3.  **Build & Upload:**
-    *   Connect your ESP32-S3 board to your computer.
-    *   Click the **PlatformIO: Upload** button (the arrow icon) in the bottom status bar of VS Code.
-
----
-
-## 📄 License
-This project is proprietary and customized for Mitchell Media's Vesta Core Trainer platforms.
+- Confirm edge registration in `GET /api/edges`
+- Toggle W/Y/O/G and confirm status updates
+- Confirm pressure values move in heat and cool runs
+- Confirm HPS/LPS flags align with pressure and active fault states

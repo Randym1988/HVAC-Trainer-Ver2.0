@@ -1,4 +1,4 @@
-#include <Arduino.h>
+﻿#include <Arduino.h>
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <ESPAsyncWebServer.h>
@@ -18,20 +18,26 @@
 // ==========================================
 // DOCKER ENGINE LINK
 // ==========================================
-String engine_base_url = "http://192.168.1.139:8000";
+const char* ENGINE_CONFIG_FILE = "/engine.json";
+String engine_base_url = "";
 const char* EDGE_ID = "heat_pump_trainer_01";
 const char* EDGE_LABEL = "Heat Pump Trainer 01";
 const char* TRAINER_TYPE = "heat_pump";
 const uint32_t ENGINE_HEARTBEAT_INTERVAL_MS = 200;
+const uint32_t ENGINE_DISCOVERY_RETRY_MS = 15000;
 uint32_t engine_heartbeat_timer = 0;
+uint32_t next_engine_discovery_ms = 0;
 bool engine_link_enabled = true;
 
 // ==========================================
 // HARDWARE SETUP
 // ==========================================
-PCF8575 board_1(0x20, 15, 23); 
-PCF8575 board_2(0x21, 15, 23);
-PCF8575 board_3(0x22, 15, 23);
+const int I2C_SDA_PIN = 8;
+const int I2C_SCL_PIN = 9;
+
+PCF8575 board_1(0x20, I2C_SDA_PIN, I2C_SCL_PIN); 
+PCF8575 board_2(0x21, I2C_SDA_PIN, I2C_SCL_PIN);
+PCF8575 board_3(0x22, I2C_SDA_PIN, I2C_SCL_PIN);
 
 const int PIN_W = 7;
 const int PIN_Y = 6;
@@ -44,6 +50,7 @@ bool ota_in_progress = false;
 
 DNSServer dnsServer;
 bool is_ap_mode = false; 
+bool setup_ap_active = false;
 
 // ==========================================
 // GLOBAL TIMERS & STATES
@@ -120,11 +127,120 @@ int current_problem_score = 100;
 String ble_login_status = "None"; // Tracks BLE login result ("success", "denied", or "None")
 String wifi_ssid = "ComfortSC";
 String wifi_pass = "8037945526";
+String authToken = "";
+String authRole = "";
+uint32_t authExpiry = 0;
+const uint32_t AUTH_TOKEN_TTL = 28800;
+uint32_t wifi_reconnect_timer = 0;
 bool pending_reboot = false;
 uint32_t reboot_timer = 0;
+bool i2c_boards_present = false;
+bool hb_last_w = false;
+bool hb_last_y = false;
+bool hb_last_o = false;
+bool hb_last_g = false;
+bool hb_last_lps = false;
+bool hb_last_hps = false;
+TaskHandle_t comm_task_handle = nullptr;
+TaskHandle_t control_task_handle = nullptr;
+bool dual_core_runtime_enabled = false;
+
+const uint32_t COMM_TASK_SLICE_MS = 5;
+const uint32_t CONTROL_TASK_SLICE_MS = 10;
 
 void reset_all_faults_and_sims();
 void handleDiagnosis(String submitted);
+void runCommsSlice();
+void runControlSlice();
+void commTask(void* parameter);
+void controlTask(void* parameter);
+
+bool probePcf8575(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+}
+
+void detectI2CBoards() {
+  bool b1 = probePcf8575(0x20);
+  bool b2 = probePcf8575(0x21);
+  bool b3 = probePcf8575(0x22);
+  i2c_boards_present = b1 && b2 && b3;
+  if (i2c_boards_present) {
+    Serial.println("I2C relay boards detected.");
+  } else {
+    Serial.println("I2C relay boards not detected. Running in no-relay mode.");
+  }
+}
+
+String loadEngineBaseUrl() {
+  if (!LittleFS.exists(ENGINE_CONFIG_FILE)) return String();
+  File f = LittleFS.open(ENGINE_CONFIG_FILE, FILE_READ);
+  if (!f) return String();
+  DynamicJsonDocument doc(256);
+  DeserializationError error = deserializeJson(doc, f);
+  f.close();
+  if (error) return String();
+  return doc["base_url"].as<String>();
+}
+
+void saveEngineBaseUrl(const String& baseUrl) {
+  if (baseUrl.length() == 0) return;
+  File f = LittleFS.open(ENGINE_CONFIG_FILE, FILE_WRITE);
+  if (!f) return;
+  DynamicJsonDocument doc(256);
+  doc["base_url"] = baseUrl;
+  serializeJson(doc, f);
+  f.close();
+}
+
+String discoverEngineBaseUrl(bool allowStored = true) {
+  String stored = loadEngineBaseUrl();
+  if (allowStored && stored.length() > 0) return stored;
+
+  const char* hostCandidates[] = {"trainer-engine", "trainer-engine.local", "vesta-engine", "vesta-engine.local", "hvac-engine", "hvac-engine.local"};
+  for (const char* host : hostCandidates) {
+    IPAddress resolved = MDNS.queryHost(host);
+    if (resolved != IPAddress(0, 0, 0, 0)) {
+      return "http://" + resolved.toString() + ":8000";
+    }
+  }
+
+  // Scan the /24 subnet for a host responding on :8000/api/edges
+  IPAddress localIP = WiFi.localIP();
+  if (localIP != IPAddress(0, 0, 0, 0)) {
+    HTTPClient scanHttp;
+    char scanBuf[42];
+    for (int scanI = 1; scanI < 255; scanI++) {
+      if (scanI == localIP[3]) continue;
+      snprintf(scanBuf, sizeof(scanBuf), "http://%d.%d.%d.%d:8000/api/edges",
+               localIP[0], localIP[1], localIP[2], scanI);
+      scanHttp.begin(scanBuf);
+      scanHttp.setTimeout(300);
+      int scanCode = scanHttp.GET();
+      scanHttp.end();
+      if (scanCode == 200) {
+        char scanBase[32];
+        snprintf(scanBase, sizeof(scanBase), "http://%d.%d.%d.%d:8000",
+                 localIP[0], localIP[1], localIP[2], scanI);
+        Serial.printf("Engine found via scan: %s\\n", scanBase);
+        return String(scanBase);
+      }
+    }
+    Serial.println("Engine not found on subnet.");
+  }
+
+  IPAddress gateway = WiFi.gatewayIP();
+  if (gateway != IPAddress(0, 0, 0, 0)) {
+    return "http://" + gateway.toString() + ":8000";
+  }
+
+  IPAddress dns = WiFi.dnsIP(0);
+  if (dns != IPAddress(0, 0, 0, 0)) {
+    return "http://" + dns.toString() + ":8000";
+  }
+
+  return String();
+}
 
 void initUserDatabase() {
   if (!LittleFS.exists("/users.json")) {
@@ -269,6 +385,9 @@ String getStatusJSON() {
   doc["reset_counter"] = reset_counter;
   doc["ble_login_status"] = ble_login_status;
   doc["trainer_type"] = TRAINER_TYPE;
+  if (ble_login_status == "success" && authToken.length() > 0) {
+    doc["auth_token"] = authToken;
+  }
 
   // Export full fault/simulation bitfields so external instructor UIs can mirror every toggle state.
   for (int faultIdx = 1; faultIdx < 55; faultIdx++) {
@@ -316,18 +435,20 @@ volatile int negotiated_mtu = 20;
 // THROTTELED & SAFE BLE NOTIFY CHANNELS
 // ==========================================
 uint32_t ble_timer = 0;
-void notifyClients() { 
+void notifyClients(bool high_priority = false) { 
   String json = getStatusJSON();
+  bool delivered = false;
   
   // 1. Send WebSocket over Wi-Fi
   if (ws.count() > 0) {
     ws.textAll(json); 
+    delivered = true;
   }
   
   // 2. Send BLE Telemetry (Throttled to 1.5s to avoid RF antenna congestion)
   uint32_t now = millis();
-  if (deviceConnected && pTxCharacteristic) {
-    if (now - ble_timer >= 1500) { 
+  if (deviceConnected && pTxCharacteristic && (high_priority || (now - ble_timer >= 1500))) {
+    if (high_priority || (now - ble_timer >= 1500)) { 
       ble_timer = now;
       int len = json.length();
       int offset = 0;
@@ -336,9 +457,13 @@ void notifyClients() {
         pTxCharacteristic->setValue(json.substring(offset, offset + chunkSize).c_str());
         pTxCharacteristic->notify();
         offset += chunkSize;
-        delay(15); // Safe delay to let BLE stack transmit the packet
       }
+      delivered = true;
     }
+  }
+
+  if (delivered && ble_login_status != "None") {
+    ble_login_status = "None";
   }
 }
 
@@ -373,6 +498,27 @@ bool checkCredentials(String user, String pass) {
   return false;
 }
 
+String getUserRole(String user) {
+  user.toLowerCase();
+  File f = LittleFS.open("/users.json", FILE_READ);
+  if (!f) return "student";
+  JsonDocument db;
+  DeserializationError error = deserializeJson(db, f);
+  f.close();
+  if (!error && !db[user].isNull() && !db[user]["role"].isNull()) {
+    return db[user]["role"].as<String>();
+  }
+  return "student";
+}
+
+String generateAuthToken() {
+  uint32_t valueA = esp_random();
+  uint32_t valueB = esp_random();
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%08X%08X", valueA, valueB);
+  return String(buf);
+}
+
 class MyCallbacks: public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string rxValue = pCharacteristic->getValue();
@@ -405,13 +551,17 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
           String p = doc["pass"].as<String>();
           Serial.printf("Checking BLE Login Credentials for user: %s\n", u.c_str());
           if (checkCredentials(u, p)) {
+            authToken = generateAuthToken();
+            authRole = getUserRole(u);
+            authExpiry = (millis() / 1000) + AUTH_TOKEN_TTL;
             ble_login_status = "success";
-            logLogin(u, "student");
-            Serial.println("BLE Authentication SUCCESS!");
+            logLogin(u, authRole);
+            Serial.printf("BLE Authentication SUCCESS! role=%s\n", authRole.c_str());
           } else {
             ble_login_status = "denied";
             Serial.println("BLE Authentication DENIED!");
           }
+          force_telemetry_update = true;
         }
         
         force_telemetry_update = true;
@@ -477,8 +627,11 @@ void reset_all_faults_and_sims() {
   
   limit_trip_count = 0;
 
-  for (int i = 0; i < 16; i++) { board_1.digitalWrite(i, HIGH); board_2.digitalWrite(i, HIGH); board_3.digitalWrite(i, HIGH); }
-  board_1.digitalWrite(0, LOW); board_1.digitalWrite(4, LOW); board_1.digitalWrite(8, LOW); 
+  if (i2c_boards_present) {
+    for (int i = 0; i < 16; i++) { board_1.digitalWrite(i, HIGH); board_2.digitalWrite(i, HIGH); board_3.digitalWrite(i, HIGH); }
+    board_1.digitalWrite(0, LOW); board_1.digitalWrite(4, LOW); board_1.digitalWrite(8, LOW);
+  }
+
   reset_counter++;
 }
 
@@ -527,7 +680,7 @@ void handleDiagnosis(String submitted) {
       current_problem_score = 100; 
       student_score = (total_score_sum + current_problem_score) / (completed_problems + 1);
 
-      reset_all_faults_and_sims();
+        reset_all_faults_and_sims();
   } else {
       latest_diagnosis = "INCORRECT: " + submitted;
       
@@ -551,23 +704,55 @@ void setup() {
   initUserDatabase();
 
   loadWiFiConfig();
-  WiFi.mode(WIFI_STA); WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  if (wifi_ssid.length() == 0) {
+    wifi_ssid = "ComfortSC";
+    wifi_pass = "8037945526";
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+
+  Serial.printf("WiFi attempting SSID: '%s'\n", wifi_ssid.c_str());
+  WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
   int attempts = 0;
-   while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
+
+  if (WiFi.status() != WL_CONNECTED && wifi_ssid != "ComfortSC") {
+    Serial.println("Primary WiFi failed. Falling back to default SSID ComfortSC.");
+    wifi_ssid = "ComfortSC";
+    wifi_pass = "8037945526";
+    WiFi.disconnect(false, false);
+    delay(150);
+    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+    attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
+  }
 
   if (WiFi.status() == WL_CONNECTED) {
     is_ap_mode = false;
     Serial.println("\nWiFi connected.");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    engine_base_url = loadEngineBaseUrl();
+    if (engine_base_url.length() == 0) {
+      IPAddress gateway = WiFi.gatewayIP();
+      if (gateway != IPAddress(0, 0, 0, 0)) {
+        engine_base_url = "http://" + gateway.toString() + ":8000";
+      }
+    }
+    Serial.printf("Engine endpoint: %s\n", engine_base_url.c_str());
     if (MDNS.begin("trainer2")) {
       Serial.println("MDNS responder started! Domain: trainer2.local");
       MDNS.addService("http", "tcp", 80); 
     }
     configTzTime("EST5EDT,M3.2.0,M11.1.0", "pool.ntp.org", "time.nist.gov");
+
   } else {
     is_ap_mode = true;
-    WiFi.mode(WIFI_AP); WiFi.softAP("Vesta Core Trainer", "8037945526"); 
+    WiFi.mode(WIFI_AP);
+    setup_ap_active = WiFi.softAP("Vesta Core Trainer", "8037945526"); 
     dnsServer.start(53, "*", WiFi.softAPIP()); 
   }
   
@@ -604,7 +789,18 @@ void setup() {
 
   pinMode(PIN_W, INPUT_PULLUP); pinMode(PIN_Y, INPUT_PULLUP); pinMode(PIN_O, INPUT_PULLUP); pinMode(PIN_G, INPUT_PULLUP);
 
-  board_1.begin(); board_2.begin(); board_3.begin();
+  bool wire_ok = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  if (!wire_ok) {
+    i2c_boards_present = false;
+    Serial.printf("I2C init failed on SDA=%d/SCL=%d. Running in no-relay mode.\n", I2C_SDA_PIN, I2C_SCL_PIN);
+  } else {
+    detectI2CBoards();
+  }
+  if (i2c_boards_present) {
+    board_1.begin();
+    board_2.begin();
+    board_3.begin();
+  }
   reset_all_faults_and_sims();
 
   ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
@@ -719,7 +915,7 @@ void setup() {
                   "<form action='/wifi-save' method='POST'>"
                   "<label>SSID:</label><br><input type='text' name='ssid' value='" + wifi_ssid + "' style='width:100%; max-width:300px;'><br><br>"
                   "<label>Password:</label><br><input type='password' name='pass' style='width:100%; max-width:300px;'><br><br>"
-                  "<input type='submit' value='Save & Reboot' style='padding: 10px 20px;'></form>"
+                  "<input type='submit' value='Save & Reconnect' style='padding: 10px 20px;'></form>"
                   "</body></html>";
     request->send(200, "text/html", html);
   });
@@ -730,8 +926,14 @@ void setup() {
       doc["ssid"] = request->getParam("ssid", true)->value();
       doc["pass"] = request->getParam("pass", true)->value();
       File f = LittleFS.open("/wifi.json", FILE_WRITE); serializeJson(doc, f); f.close();
-      request->send(200, "text/html", "<html><body style='font-family:sans-serif;'><h2>Saved! Device rebooting...</h2></body></html>");
-      pending_reboot = true; reboot_timer = millis() + 2000;
+      wifi_ssid = doc["ssid"].as<String>();
+      wifi_pass = doc["pass"].as<String>();
+      is_ap_mode = false;
+      WiFi.mode(WIFI_STA);
+      WiFi.disconnect(false, false);
+      delay(150);
+      WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+      request->send(200, "text/html", "<html><body style='font-family:sans-serif;'><h2>Saved! Reconnecting to Wi-Fi now (no reboot required).</h2></body></html>");
     } else { request->send(400, "text/plain", "Missing credentials"); }
   });
 
@@ -779,7 +981,7 @@ void setup() {
   server.onNotFound([](AsyncWebServerRequest *request){
     if (request->method() == HTTP_OPTIONS) {
       request->send(200);
-    } else if (is_ap_mode) { 
+    } else if (is_ap_mode || setup_ap_active) { 
       request->redirect("http://" + WiFi.softAPIP().toString() + "/"); 
     } else { 
       request->send(404, "text/plain", "Not Found"); 
@@ -889,10 +1091,54 @@ void setup() {
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "*");
 
   server.begin();
+
+  BaseType_t comm_created = xTaskCreatePinnedToCore(
+    commTask,
+    "comm_task",
+    8192,
+    nullptr,
+    1,
+    &comm_task_handle,
+    0
+  );
+  BaseType_t control_created = xTaskCreatePinnedToCore(
+    controlTask,
+    "control_task",
+    8192,
+    nullptr,
+    1,
+    &control_task_handle,
+    1
+  );
+
+  dual_core_runtime_enabled = (comm_created == pdPASS && control_created == pdPASS);
+  if (dual_core_runtime_enabled) {
+    Serial.println("Dual-core runtime enabled: comm=core0, control=core1");
+  } else {
+    Serial.println("Dual-core task creation failed, using single-core loop fallback.");
+  }
 }
 
 void sendEngineHeartbeat() {
   if (!engine_link_enabled || WiFi.status() != WL_CONNECTED) return;
+  uint32_t now = millis();
+
+  bool changed = (state_w != hb_last_w) ||
+                 (state_y != hb_last_y) ||
+                 (state_o != hb_last_o) ||
+                 (state_g != hb_last_g) ||
+                 (phys_lps_tripped != hb_last_lps) ||
+                 (phys_hps_tripped != hb_last_hps);
+
+  if (!changed && now < engine_heartbeat_timer) return;
+  engine_heartbeat_timer = now + ENGINE_HEARTBEAT_INTERVAL_MS;
+
+  if (engine_base_url.length() == 0) {
+    if (now < next_engine_discovery_ms) return;
+    engine_base_url = discoverEngineBaseUrl(false);
+    next_engine_discovery_ms = now + ENGINE_DISCOVERY_RETRY_MS;
+    if (engine_base_url.length() == 0) return;
+  }
 
   auto postHeartbeat = [](const String& baseUrl, const String& payload) -> bool {
     if (baseUrl.length() == 0) return false;
@@ -929,14 +1175,45 @@ void sendEngineHeartbeat() {
   serializeJson(doc, payload);
 
   if (postHeartbeat(engine_base_url, payload)) {
+    saveEngineBaseUrl(engine_base_url);
+    hb_last_w = state_w;
+    hb_last_y = state_y;
+    hb_last_o = state_o;
+    hb_last_g = state_g;
+    hb_last_lps = phys_lps_tripped;
+    hb_last_hps = phys_hps_tripped;
     return;
   }
 
   String gatewayBase = "http://" + WiFi.gatewayIP().toString() + ":8000";
   if (gatewayBase != engine_base_url && postHeartbeat(gatewayBase, payload)) {
     engine_base_url = gatewayBase;
+    saveEngineBaseUrl(engine_base_url);
+    hb_last_w = state_w;
+    hb_last_y = state_y;
+    hb_last_o = state_o;
+    hb_last_g = state_g;
+    hb_last_lps = phys_lps_tripped;
+    hb_last_hps = phys_hps_tripped;
     Serial.printf("Engine heartbeat switched to gateway endpoint: %s\n", engine_base_url.c_str());
     return;
+  }
+
+  if (now >= next_engine_discovery_ms) {
+    String discoveredBase = discoverEngineBaseUrl(false);
+    next_engine_discovery_ms = now + ENGINE_DISCOVERY_RETRY_MS;
+    if (discoveredBase.length() > 0 && discoveredBase != engine_base_url && postHeartbeat(discoveredBase, payload)) {
+      engine_base_url = discoveredBase;
+      saveEngineBaseUrl(engine_base_url);
+      hb_last_w = state_w;
+      hb_last_y = state_y;
+      hb_last_o = state_o;
+      hb_last_g = state_g;
+      hb_last_lps = phys_lps_tripped;
+      hb_last_hps = phys_hps_tripped;
+      Serial.printf("Engine heartbeat switched to discovered endpoint: %s\n", engine_base_url.c_str());
+      return;
+    }
   }
 
   Serial.printf("Engine heartbeat failed at %s\n", engine_base_url.c_str());
@@ -953,10 +1230,6 @@ void handle_system_health() {
     else { status_led.setPixelColor(0, status_led.Color(255, 0, 0)); }
     status_led.show();
   }
-  if (now >= engine_heartbeat_timer) { 
-    engine_heartbeat_timer = now + ENGINE_HEARTBEAT_INTERVAL_MS; 
-    sendEngineHeartbeat(); 
-  }
   if (now >= heartbeat_timer) { heartbeat_timer = now + 500; notifyClients(); } 
 }
 
@@ -966,7 +1239,7 @@ float add_noise(float base, float variance) {
 }
 
 // ==========================================
-// 🚀 DYNAMIC PHYSICS & FAULT ENGINE
+// ðŸš€ DYNAMIC PHYSICS & FAULT ENGINE
 // ==========================================
 uint32_t telemetry_timer = 0;
 void handle_telemetry() {
@@ -1034,7 +1307,9 @@ void handle_telemetry() {
 
   if (override_defrost_sensor == 1) fault_active[9] = true;
   else if (override_defrost_sensor == 0) fault_active[9] = false;
-  board_3.digitalWrite(8, fault_active[9] ? LOW : HIGH);
+  if (i2c_boards_present) {
+    board_3.digitalWrite(8, fault_active[9] ? LOW : HIGH);
+  }
 
   if (is_defrosting && is_compressor) { phys_cooling = true; phys_heating = false; }
 
@@ -1259,6 +1534,16 @@ void handle_hvac_logic() {
   bool send_update = false;
   if (current_w != last_w_state || current_y != last_y_state || current_o != last_o_state || current_g != last_g_state) { send_update = true; }
 
+  // Keep thermostat telemetry alive even if relay boards are unavailable.
+  if (!i2c_boards_present) {
+    last_w_state = current_w;
+    last_y_state = current_y;
+    last_o_state = current_o;
+    last_g_state = current_g;
+    if (send_update) { notifyClients(); }
+    return;
+  }
+
   board_3.digitalWrite(6, (phys_lps_tripped || fault_active[7]) ? LOW : HIGH); 
   board_3.digitalWrite(7, (phys_hps_tripped || fault_active[8]) ? LOW : HIGH); 
 
@@ -1361,8 +1646,19 @@ void handle_simulations() {
   } else if (sim_active[15] && !current_y) { board_2.digitalWrite(14, HIGH); sim_step[15] = 0; sim_timer[15] = 0; }
 }
 
-void loop() {
-  if (is_ap_mode) { dnsServer.processNextRequest(); } 
+void runCommsSlice() {
+  if (is_ap_mode || setup_ap_active) { dnsServer.processNextRequest(); }
+  else if (wifi_ssid.length() > 0 && WiFi.status() != WL_CONNECTED) {
+    uint32_t now = millis();
+    if (now - wifi_reconnect_timer >= 10000) {
+      wifi_reconnect_timer = now;
+      Serial.println("WiFi disconnected. Attempting reconnect...");
+      WiFi.reconnect();
+      if (WiFi.status() != WL_CONNECTED) {
+        WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+      }
+    }
+  }
   ArduinoOTA.handle();
   ws.cleanupClients(); 
   
@@ -1374,9 +1670,9 @@ void loop() {
   // FIXED BLE RECONNECT ENGINE
   // =============================================================
   if (!deviceConnected && oldDeviceConnected) {
-    delay(200); // Small cooldown to clear old RF connection frames
+    vTaskDelay(pdMS_TO_TICKS(200)); // Small cooldown to clear old RF connection frames
     NimBLEDevice::getAdvertising()->stop(); // Clear internal driver flag trace
-    delay(50);
+    vTaskDelay(pdMS_TO_TICKS(50));
     NimBLEDevice::getAdvertising()->start(); // Re-announce presence back to the smartphone
     Serial.println("BLE Disconnect Handled: Restarting Advertising Beacon...");
     oldDeviceConnected = deviceConnected;
@@ -1389,12 +1685,44 @@ void loop() {
 
   if (force_telemetry_update) {
     force_telemetry_update = false;
-    notifyClients();
+    notifyClients(true);
   }
 
+  sendEngineHeartbeat();
+  handle_system_health();
+}
+
+void runControlSlice() {
   handle_hvac_logic();
   handle_telemetry();
-  handle_simulations();    
-  handle_system_health();
+  if (i2c_boards_present) {
+    handle_simulations();
+  }
+}
+
+void commTask(void* parameter) {
+  (void)parameter;
+  for (;;) {
+    runCommsSlice();
+    vTaskDelay(pdMS_TO_TICKS(COMM_TASK_SLICE_MS));
+  }
+}
+
+void controlTask(void* parameter) {
+  (void)parameter;
+  for (;;) {
+    runControlSlice();
+    vTaskDelay(pdMS_TO_TICKS(CONTROL_TASK_SLICE_MS));
+  }
+}
+
+void loop() {
+  if (!dual_core_runtime_enabled) {
+    runCommsSlice();
+    runControlSlice();
+    return;
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(1000));
 
 }

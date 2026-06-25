@@ -6,8 +6,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - FRONTEND_URL=http://localhost:8080
       - EDGE_REQUIRED=true
+      - MQTT_HOST=mqtt
+    depends_on:
+      - mqtt
     restart: unless-stopped
 
   frontend:
@@ -18,4 +20,16 @@ services:
       - "8080:80"
     depends_on:
       - engine
+    restart: unless-stopped
+  
+  # MQTT broker for trainer communication
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
     restart: unless-stopped

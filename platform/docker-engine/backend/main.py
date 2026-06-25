@@ -2,10 +2,15 @@ import asyncio
 import time
 import random
 import os
+import socket
+import json
+from contextlib import suppress
 from fastapi import FastAPI, Request, HTTPException, Response, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
+from zeroconf import IPVersion, ServiceInfo, Zeroconf
+from aiomqtt import Client as MQTTClient, MqttError
 
 app = FastAPI()
 
@@ -19,9 +24,60 @@ app.add_middleware(
 )
 
 active_websockets = []
+# Global MQTT client placeholder (used for publishing from REST endpoints)
+mqtt_client: Optional[MQTTClient] = None
+mqtt_task: Optional[asyncio.Task] = None
+MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
 EDGE_REQUIRED = os.getenv("EDGE_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
 SIMULATION_TICK_SECONDS = 0.20
 WS_BROADCAST_INTERVAL_SECONDS = 0.25
+MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
+mdns = None
+mdns_service_info = None
+
+
+def resolve_host_ip() -> str:
+    candidates = ["host.docker.internal", "gateway.docker.internal"]
+    for host in candidates:
+        with suppress(Exception):
+            resolved = socket.gethostbyname(host)
+            if resolved and resolved != "127.0.0.1":
+                return resolved
+    return ""
+
+
+def start_mdns_advertisement() -> None:
+    global mdns, mdns_service_info
+    host_ip = resolve_host_ip()
+    if not host_ip:
+        print("[mDNS] Host IP not resolved; skipping advertisement")
+        return
+
+    mdns = Zeroconf(ip_version=IPVersion.V4Only)
+    service_type = "_http._tcp.local."
+    service_name = f"{MDNS_SERVICE_NAME}._http._tcp.local."
+    mdns_service_info = ServiceInfo(
+        service_type,
+        service_name,
+        addresses=[socket.inet_aton(host_ip)],
+        port=8000,
+        properties={b"path": b"/"},
+        server=f"{MDNS_SERVICE_NAME}.local.",
+    )
+    mdns.register_service(mdns_service_info)
+    print(f"[mDNS] Advertising {MDNS_SERVICE_NAME}.local -> http://{host_ip}:8000")
+
+
+def stop_mdns_advertisement() -> None:
+    global mdns, mdns_service_info
+    if mdns and mdns_service_info:
+        with suppress(Exception):
+            mdns.unregister_service(mdns_service_info)
+    if mdns:
+        with suppress(Exception):
+            mdns.close()
+    mdns = None
+    mdns_service_info = None
 
 # ==========================================
 # GLOBAL STATE (Replaces C++ variables)
@@ -338,12 +394,14 @@ async def simulation_loop():
 
         fault_non_condensables = state.fault_active[40]
         fault_stuck_id_txv     = state.fault_active[41]
+        fault_stuck_od_txv     = state.fault_active[48]
         fault_clogged_txv      = state.fault_active[42]
         fault_clogged_piston   = state.fault_active[43]
         fault_comp_bypass      = state.fault_active[44]
         fault_inefficient_comp = state.fault_active[45]
         fault_low_id_cfm       = state.fault_active[46]
         fault_high_id_cfm      = state.fault_active[47]
+        fault_rv_bypass        = state.fault_active[49]
 
         target_supply = state.set_id_temp 
         target_low = state.sim_od_low_press
@@ -438,6 +496,10 @@ async def simulation_loop():
             if fault_inefficient_comp: 
                 target_low += 25.0 * ref_mult
                 target_high -= 45.0 * ref_mult
+            if fault_rv_bypass:
+                target_low += 50.0 * ref_mult
+                target_high -= 80.0 * ref_mult
+                target_sh += 15.0
             if fault_low_id_cfm: 
                 target_low -= 20.0 * ref_mult
                 target_sh = 2.0
@@ -467,6 +529,7 @@ async def simulation_loop():
             target_supply = (state.set_id_temp - 20.0) + latent_heat_penalty
 
             if fault_comp_bypass: state.sim_od_suction_temp += 35.0 
+            if fault_rv_bypass: state.sim_od_suction_temp += 45.0
             if fault_non_condensables: state.sim_od_liquid_temp -= 12.0 
             if fault_clogged_txv or fault_clogged_piston: state.sim_od_liquid_temp -= 15.0 
 
@@ -474,6 +537,79 @@ async def simulation_loop():
             if id_fan_fail: state.sim_od_suction_temp = add_noise(25.0, 0.5) 
 
             if phys_heating: target_supply += 65.0 # Ensure heat is simulated if both run simultaneously
+
+        elif phys_heating:
+            target_low = ((state.set_od_temp * 1.8) + 25.0) * ref_mult
+            base_head = (state.set_id_temp * 3.0) + (state.set_od_temp * 1.5) + 50.0
+            extreme_ambient_penalty = 0.0
+            if state.set_od_temp > 65.0:
+                excess = state.set_od_temp - 65.0
+                extreme_ambient_penalty = (excess * excess * 1.2)
+            target_high = (base_head + extreme_ambient_penalty) * ref_mult
+            target_sh = 10.0 if state.id_is_txv else 15.0
+
+            line_friction_delta = 7.0 if id_fan_fail else 24.0
+
+            if fault_non_condensables:
+                target_high += 130.0 * ref_mult
+                target_low += 5.0 * ref_mult
+                line_friction_delta += 12.0
+            if fault_stuck_od_txv or fault_clogged_txv or fault_clogged_piston:
+                target_low -= 35.0 * ref_mult
+                target_high -= 15.0 * ref_mult
+                target_sh = 35.0
+            if fault_comp_bypass:
+                target_low += 40.0 * ref_mult
+                target_high -= 75.0 * ref_mult
+            if fault_inefficient_comp:
+                target_low += 25.0 * ref_mult
+                target_high -= 45.0 * ref_mult
+            if fault_rv_bypass:
+                target_low += 50.0 * ref_mult
+                target_high -= 80.0 * ref_mult
+                target_sh += 15.0
+            if fault_low_id_cfm:
+                target_high += 55.0 * ref_mult
+                target_supply += 18.0
+                line_friction_delta += 10.0
+            if fault_high_id_cfm:
+                target_high -= 25.0 * ref_mult
+                target_supply -= 9.0
+                line_friction_delta -= 6.0
+
+            low_abs = max(state.sim_od_low_press + 14.7, 1.0)
+            comp_ratio = (state.sim_od_high_press + 14.7) / low_abs
+            vol_eff_penalty = max((comp_ratio - 2.5) * 4.0, 0.0)
+
+            target_low += vol_eff_penalty * ref_mult
+
+            if od_fan_fail:
+                target_low = 20.0 * ref_mult
+            if id_fan_fail:
+                target_high = 650.0 * ref_mult
+
+            estimated_low_sat = (target_low / ref_mult) * 0.3 + 10.0
+            state.sim_od_suction_temp = add_noise(estimated_low_sat + target_sh, 0.4)
+            state.sim_od_liquid_temp = add_noise(state.set_id_temp + 12.0 + (extreme_ambient_penalty * 0.05), 0.4)
+            state.sim_od_discharge = add_noise(
+                state.sim_od_suction_temp + (comp_ratio * 24.0) + 55.0 + extreme_ambient_penalty + vol_eff_penalty,
+                2.0,
+            )
+            target_supply = (state.set_id_temp + 27.0) + (extreme_ambient_penalty * 0.1)
+
+            if fault_comp_bypass:
+                state.sim_od_suction_temp += 35.0
+            if fault_rv_bypass:
+                state.sim_od_suction_temp += 45.0
+            if fault_non_condensables:
+                state.sim_od_liquid_temp -= 12.0
+            if fault_clogged_txv or fault_clogged_piston:
+                state.sim_od_liquid_temp -= 15.0
+
+            if id_fan_fail:
+                state.sim_od_discharge = add_noise(250.0, 5.0)
+            if od_fan_fail:
+                state.sim_od_suction_temp = add_noise(5.0, 0.5)
 
         if state.force_pressure_snap and is_compressor:
             state.sim_od_low_press = target_low
@@ -664,7 +800,76 @@ async def simulation_loop():
 
 @app.on_event("startup")
 async def startup_event():
+    global mqtt_task
+    with suppress(Exception):
+        await asyncio.to_thread(start_mdns_advertisement)
     asyncio.create_task(simulation_loop())
+    mqtt_task = asyncio.create_task(mqtt_command_listener())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global mqtt_task, mqtt_client
+    if mqtt_task is not None:
+        mqtt_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await mqtt_task
+    mqtt_task = None
+    mqtt_client = None
+    stop_mdns_advertisement()
+
+# -------------------------------------------------
+# MQTT command listener – forwards incoming commands to WebSocket clients or updates state as needed
+# -------------------------------------------------
+async def mqtt_command_listener():
+    global mqtt_client
+    while True:
+        try:
+            async with MQTTClient(MQTT_HOST) as client:
+                mqtt_client = client
+                await client.subscribe("trainer/+/command")
+                async for message in client.messages:
+                    topic = str(message.topic)
+                    payload = message.payload.decode()
+                    try:
+                        data = json.loads(payload)
+                    except json.JSONDecodeError:
+                        print(f"[MQTT] Invalid JSON on {topic}: {payload}")
+                        continue
+
+                    # Expected topic format: trainer/{trainer_id}/command
+                    parts = topic.split('/')
+                    if len(parts) != 3:
+                        continue
+                    _, trainer_id, _ = parts
+
+                    # For now, simply broadcast the command to any connected WebSocket clients.
+                    if active_websockets:
+                        for ws in active_websockets:
+                            try:
+                                await ws.send_json({"trainer_id": trainer_id, "command": data})
+                            except Exception:
+                                pass
+        except MqttError as e:
+            mqtt_client = None
+            print(f"[MQTT] Connection error: {e}")
+            await asyncio.sleep(2)
+
+# -------------------------------------------------
+# REST endpoint to send commands to a specific trainer via MQTT
+# -------------------------------------------------
+@app.post("/api/trainer/{trainer_id}/command")
+async def send_trainer_command(trainer_id: str, command: Dict[str, Any]):
+    """Publish a command to a trainer over MQTT. The command payload should be a JSON object, e.g. {"action": "reset"} or {"action": "grade", "score": 95}."""
+    if mqtt_client is None:
+        raise HTTPException(status_code=500, detail="MQTT client not initialized")
+    topic = f"trainer/{trainer_id}/command"
+    payload = json.dumps(command)
+    try:
+        await mqtt_client.publish(topic, payload, qos=1)
+    except MqttError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to publish MQTT message: {e}")
+    return {"message": "command sent", "trainer_id": trainer_id}
 
 # ==========================================
 # API ROUTES (Replaces server.on(...) in main.cpp)
