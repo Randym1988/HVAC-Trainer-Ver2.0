@@ -447,6 +447,16 @@ async def simulation_loop():
         # - B mode (is_b_type=1): B energized => heating, B de-energized => cooling
         if state.trainer_type == "heat_pump":
             rv_heating = state.state_o if state.is_b_type else (not state.state_o)
+            # W call acts as aux/emergency heat overlay.
+            phys_heating = (is_compressor and rv_heating) or effective_w_call
+            phys_cooling = is_compressor and (not rv_heating)
+        else: # ac_gas furnace
+            phys_heating = effective_w_call
+            phys_cooling = is_compressor
+
+        # Override heating state with firmware-native simulation if available
+        if sim_edge and sim_edge.get("telemetry", {}).get("sim_flame_active"):
+            phys_heating = True
             phys_cooling = is_compressor and (not rv_heating)
             # W call acts as aux/emergency heat overlay.
             phys_heating = (is_compressor and rv_heating) or effective_w_call
@@ -610,6 +620,11 @@ async def simulation_loop():
                 state.sim_od_discharge = add_noise(250.0, 5.0)
             if od_fan_fail:
                 state.sim_od_suction_temp = add_noise(5.0, 0.5)
+        
+        # Furnace-specific temperature simulation
+        if state.trainer_type == "ac_gas" and phys_heating:
+            target_supply = 130.0
+
 
         if state.force_pressure_snap and is_compressor:
             state.sim_od_low_press = target_low
@@ -688,8 +703,8 @@ async def simulation_loop():
                 state.furnace_state = "FURNACE_POST_PURGE"
                 state.furnace_timer = now
             elif now - state.furnace_timer >= 15.0:
-                pressure_switch_closed = not state.fault_active[16] and not state.fault_active[23] and not state.fault_active[17]
-                limit_ok = not state.fault_active[22] and not state.fault_active[33]
+                pressure_switch_closed = not state.fault_active[16] and not state.fault_active[23] and not state.fault_active[17] # Matches f16, f23, f17
+                limit_ok = not state.fault_active[22] and not state.fault_active[33] and not state.fault_active[34] # Matches f22, f33, f34
                 
                 if pressure_switch_closed and limit_ok:
                     state.furnace_state = "FURNACE_IGNITER_WARMUP"
@@ -697,6 +712,7 @@ async def simulation_loop():
                     state.igniter_on = True
                 else:
                     state.furnace_state = "FURNACE_LOCKOUT"
+                    # Inducer remains on for safety as per firmware logic
 
         elif state.furnace_state == "FURNACE_IGNITER_WARMUP":
             if not effective_w_call:
@@ -715,16 +731,16 @@ async def simulation_loop():
                 state.igniter_on = False
                 state.gas_valve_on = False
             elif now - state.furnace_timer >= 4.0:
-                flame_sensed = not state.fault_active[32] and not state.fault_active[18] and not state.fault_active[21]
+                flame_sensed = not state.fault_active[32] and not state.fault_active[18] and not state.fault_active[21] # Matches f32, f18, f21
                 if flame_sensed:
                     state.furnace_state = "FURNACE_HEATING"
                     state.igniter_on = False
                     state.blower_on_delay = now + 30.0
                 else:
                     state.ignition_retry_count += 1
-                    state.igniter_on = False
+                    state.igniter_on = False # Turn off igniter on failure
                     state.gas_valve_on = False
-                    state.furnace_state = "FURNACE_PRE_PURGE" if state.ignition_retry_count < 3 else "FURNACE_LOCKOUT"
+                    state.furnace_state = "FURNACE_PRE_PURGE" if state.ignition_retry_count < 3 else "FURNACE_LOCKOUT" # Retry or lockout
                     state.furnace_timer = now
 
         elif state.furnace_state == "FURNACE_HEATING":
@@ -732,7 +748,7 @@ async def simulation_loop():
                 state.gas_valve_on = False
                 state.furnace_state = "FURNACE_POST_PURGE"
                 state.furnace_timer = now
-            elif state.sim_id_supply_temp > 150.0: # Simulating high limit trip
+            elif state.sim_id_supply_temp > 150.0: # High limit trip
                 state.furnace_state = "FURNACE_LOCKOUT"
                 state.gas_valve_on = False
                 state.igniter_on = False
@@ -752,19 +768,14 @@ async def simulation_loop():
 
         elif state.furnace_state == "FURNACE_LOCKOUT":
             if not effective_w_call:
-                state.furnace_state = "FURNACE_IDLE"
-                state.inducer_on = False
-                state.igniter_on = False
-                state.gas_valve_on = False
-                state.heat_blower_on = False
-            elif state.sim_id_supply_temp < 110.0:
-                # Auto-reset after cooling from high-limit trip
+                # If call for heat is removed, go to post-purge to cool down and then idle
+                state.furnace_state = "FURNACE_POST_PURGE"
+                state.furnace_timer = now
+            elif state.sim_id_supply_temp < 110.0 and state.limit_trip_count > 0:
+                # Auto-reset from a high-limit trip once the furnace has cooled down
                 state.furnace_state = "FURNACE_PRE_PURGE"
                 state.furnace_timer = now
-                state.inducer_on = True
-                state.igniter_on = False
-                state.gas_valve_on = False
-                state.heat_blower_on = True
+                # Relays are handled by the target state
 
         if sim_edge is not None:
             runtime = ensure_edge_runtime(sim_edge)

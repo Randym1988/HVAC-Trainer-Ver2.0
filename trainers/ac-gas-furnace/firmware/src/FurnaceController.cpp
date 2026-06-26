@@ -104,7 +104,7 @@ void FurnaceController::update(bool w_call, float supply_temp) {
             if (!w_call) {
                 furnace_state = FURNACE_POST_PURGE;
                 furnace_timer = now;
-                set_relays(true, false, false, heat_blower_on);
+                set_relays(true, false, false, heat_blower_on); // Turn off gas valve
             } else if (supply_temp > 150.0f) {
                 furnace_state = FURNACE_LOCKOUT;
                 set_relays(true, false, false, true);
@@ -117,7 +117,7 @@ void FurnaceController::update(bool w_call, float supply_temp) {
         case FURNACE_POST_PURGE:
             if (now - furnace_timer >= 15000) {
                 furnace_state = FURNACE_IDLE;
-                set_relays(false, false, false, heat_blower_on);
+                set_relays(false, false, false, heat_blower_on); // Turn off inducer
                 blower_off_delay = now + 90000;
             }
             break;

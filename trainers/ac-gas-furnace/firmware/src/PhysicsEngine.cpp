@@ -25,7 +25,16 @@ PhysicsEngine::PhysicsEngine()
 	  sim_id_ambient(75.0f),
 	  sim_id_return_temp(75.0f),
 	  sim_id_supply_temp(58.0f),
-	  sim_id_rh(50.0f) {}
+	  sim_id_rh(50.0f),
+      // Initialize new variables
+      flame_active(false),
+      blower_running(false),
+      high_limit_tripped(false),
+      gas_valve_on_time(0),
+      ignition_timer(0),
+      simulated_cfm(0.0f),
+      static_pressure(0.0f),
+      telemetry_state("Idle") {}
 
 void PhysicsEngine::begin() {
 	telemetry_timer = millis();
@@ -38,6 +47,15 @@ void PhysicsEngine::reset() {
 	force_pressure_snap = true;
 	last_comp_state = false;
 	comp_start_time = 0;
+    flame_active = false;
+    blower_running = false;
+    high_limit_tripped = false;
+    gas_valve_on_time = 0;
+    ignition_timer = 0;
+    simulated_cfm = 0.0f;
+    static_pressure = 0.0f;
+    telemetry_state = "Idle";
+
 
 	sim_comp_amps = 0.0f;
 	sim_od_fan_amps = 0.0f;
@@ -75,15 +93,53 @@ float PhysicsEngine::add_noise(float base, float variance) {
 	return base + (centered * variance);
 }
 
-void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool heat_blower_on, const bool* faults) {
+void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_blower_on, const bool* faults) {
 	bool has_faults = faults != nullptr;
 	bool compressor_failed = has_faults && (faults[4] || faults[31]);
 	bool cooling_call = y_call && !compressor_failed;
 	bool indoor_fan_failed = has_faults && faults[24];
-	bool outdoor_fan_failed = has_faults && faults[6];
-	bool blower_running = (g_call || heat_blower_on) && !indoor_fan_failed;
+	bool outdoor_fan_failed = has_faults && faults[6];	
+    
+    // The physical blower input is now monitored from the specified GPIO pin
+    blower_running = physical_blower_on && !indoor_fan_failed;
+    // The `w_call` is our "Gas Valve Input" for the purpose of this simulation
+    bool gas_valve_active = w_call;
+    uint32_t now = millis();
 
-	sim_od_ambient = set_od_temp;
+    // 1. Flame/Gas Monitoring
+    if (gas_valve_active && gas_valve_on_time == 0) {
+        gas_valve_on_time = now;
+        ignition_timer = now + 2000; // 2-second ignition delay
+        telemetry_state = "Ignition Delay";
+    } else if (!gas_valve_active) {
+        gas_valve_on_time = 0;
+        ignition_timer = 0;
+        flame_active = false;
+        telemetry_state = "Idle";
+    }
+
+    if (ignition_timer > 0 && now >= ignition_timer) {
+        flame_active = true;
+        telemetry_state = "Burners Lit";
+        ignition_timer = 0; // Prevent re-triggering
+    }
+
+    // 2. Blower Monitoring
+    if (blower_running) {
+        simulated_cfm = 1200.0f;
+        static_pressure = 0.5f;
+    } else {
+        simulated_cfm = 0.0f;
+        static_pressure = 0.0f;
+    }
+
+    // 3. Safety/Fault Simulation
+    if (gas_valve_active && now - gas_valve_on_time > 90000 && !blower_running) {
+        high_limit_tripped = true;
+        telemetry_state = "High Limit Tripped";
+    }
+
+	sim_od_ambient = set_od_temp; // Keep AC side simulation logic
 	sim_id_ambient = set_id_temp;
 	sim_id_return_temp = add_noise(set_id_temp, 0.2f);
 	sim_id_rh = set_rh;
@@ -148,22 +204,22 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool heat_blow
 		sim_od_suction_temp = add_noise((set_id_temp - 18.0f), 0.4f);
 		sim_od_liquid_temp = add_noise((set_od_temp + 12.0f), 0.5f);
 		sim_od_discharge = add_noise((set_od_temp + 70.0f), 1.5f);
-		sim_id_supply_temp = add_noise((set_id_temp - 16.0f), 0.5f);
 
 		sim_comp_amps = 8.5f;
 		if (has_faults && faults[45]) sim_comp_amps -= 1.2f;
 		if (has_faults && faults[40]) sim_comp_amps += 1.4f;
 		if (has_faults && faults[44]) sim_comp_amps -= 0.8f;
 	} else {
-		sim_comp_amps = 0.0f;
+        sim_comp_amps = 0.0f;
 		sim_od_low_press = add_noise(125.0f, 0.5f);
 		sim_od_high_press = add_noise(130.0f, 0.5f);
 		sim_od_liquid_press = sim_od_high_press;
 		sim_od_suction_temp = add_noise(set_id_temp, 0.3f);
 		sim_od_liquid_temp = add_noise(set_od_temp, 0.3f);
 		sim_od_discharge = add_noise(set_od_temp + 8.0f, 0.4f);
-		sim_id_supply_temp = add_noise(set_id_temp - (w_call ? -18.0f : 1.0f), 0.5f);
 	}
+
+    sim_id_supply_temp = add_noise(set_id_temp, 0.2f); // Revert to simple ambient tracking
 
 	bool lps_board_open = has_faults && (faults[7] || faults[26]);
 	bool hps_board_open = has_faults && (faults[8] || faults[27]);

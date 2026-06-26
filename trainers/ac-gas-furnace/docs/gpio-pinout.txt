@@ -1,0 +1,69 @@
+# AC/Gas Furnace ESP32 GPIO and I/O Expander Pinout
+
+# This document lists the GPIO pins used by the ESP32 microcontroller and the
+# connected PCF8575 I/O expander boards for the furnace trainer.
+
+# ==================================================
+# ESP32 On-Board GPIO Pins
+# ==================================================
+# These pins are connected directly to the ESP32 module.
+
+GPIO 4:  Thermostat 'G' (Fan) Call Input
+GPIO 5:  Thermostat 'O'/'B' (Reversing Valve) Call Input (Used by AC)
+GPIO 6:  Thermostat 'Y' (Compressor) Call Input (Used by AC)
+GPIO 7:  Thermostat 'W' (Heat) Call Input
+GPIO 8:  I2C Data (SDA) for PCF8575 I/O Expanders
+GPIO 9:  I2C Clock (SCL) for PCF8575 I/O Expanders
+GPIO 10: Blower Motor Monitor Input (via Optocoupler)
+GPIO 48: Status LED (NeoPixel)
+
+# ==================================================
+# Board 1 (Address 0x20) - Fault Simulation Relays
+# ==================================================
+# This board primarily controls relays that simulate open or shorted
+# circuits for various furnace and AC components.
+
+P0:  Inducer Motor Open Circuit Fault (f15)
+P1:  Hot Surface Igniter Open Circuit / Shorted Board Fault (f18)
+P2:  Gas Valve Stuck Closed Fault (f21)
+P3:  Flame Sensor Dirty/Failed Fault (f32)
+P4:  Pressure Switch Stuck Open Fault (f16)
+P5:  Pressure Switch Stuck Closed Fault (f19)
+P6:  Primary High-Temperature Limit Switch Open Fault (f22)
+P7:  Rollout Limit Switch #1 Open Fault (f33)
+P8:  Draft Safeguard / Inducer Board Fault (f17)
+P9:  Gas Valve Stuck Open Fault (f20)
+P10: Blocked Flue Simulation (f23)
+P11: Rollout Limit Switch #2 / Failed Gas Relay Fault (f34)
+P12: Indoor Blower Motor Off Fault (f24)
+P13: Indoor Blower Motor Forced On Fault (f25)
+P14: A2L Refrigerant Sensor Fault (f28)
+P15: A2L Control Board Fault (f29)
+
+# ==================================================
+# Board 2 (Address 0x21) - Primary Control Relays
+# ==================================================
+# This board controls the main high-voltage components of the furnace
+# and air conditioning system.
+
+P0:  Inducer Draft Motor Relay
+P1:  Hot Surface Igniter Relay
+P2:  Main Gas Valve Relay
+P3:  Indoor Blower Motor Relay (for Heat)
+P8:  Compressor Motor Relay (AC)
+P9:  Compressor Contactor Relay (AC)
+P11: Condenser 'Y' Signal Path Relay (AC)
+P12: 'Y' Wire Interlock Relay (AC)
+P13: Shorted Contactor Fault (f30)
+P14: Compressor High-Limit Switch Open Fault (f31)
+
+# ==================================================
+# Board 3 (Address 0x22) - AC System Fault Relays
+# ==================================================
+# This board controls faults related to the outdoor unit (condenser).
+
+P5:  Condenser (Outdoor) Fan Motor Failure (f6)
+P6:  Low-Pressure Switch Open Fault (f7)
+P7:  High-Pressure Switch Open Fault (f8)
+P14: Low-Pressure Switch Board-Level Fault (f26)
+P15: High-Pressure Switch Board-Level Fault (f27)

@@ -141,6 +141,14 @@ String CommManager::getStatusJSON() {
     doc["igniter_on"] = furnace_controller.isIgniterOn() ? 1 : 0;
     doc["gas_valve_on"] = furnace_controller.isGasValveOn() ? 1 : 0;
     doc["heat_blower_on"] = furnace_controller.isHeatBlowerOn() ? 1 : 0;
+
+    // Add new PhysicsEngine telemetry
+    doc["sim_cfm"] = physics_engine.getSimulatedCfm();
+    doc["sim_static_pressure"] = physics_engine.getStaticPressure();
+    doc["telemetry_state"] = physics_engine.getTelemetryState();
+    doc["sim_high_limit_tripped"] = physics_engine.isHighLimitTripped();
+    doc["sim_flame_active"] = physics_engine.isFlameActive();
+    doc["sim_blower_running"] = physics_engine.isBlowerRunning();
     
     // Export full fault/simulation bitfields
     for (int faultIdx = 1; faultIdx < 55; faultIdx++) {
