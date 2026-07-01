@@ -1,27 +1,17 @@
-# Heat-Pump Trainer Firmware
+# Heat-Pump Trainer Documentation
 
-This folder contains the heat-pump trainer firmware (ESP32-S3, PlatformIO).
+This folder now retains heat-pump hardware documentation only.
 
-## Scope
+## Firmware Source
 
-- Heat-pump control and thermostat call handling
-- Refrigerant and electrical telemetry simulation
-- fault/simulation injection logic
-- BLE + web + engine heartbeat integration
-
-## Current Runtime Notes
-
-- Thermostat call polling runs even when I2C relay boards are not detected.
-- Control and comm loops support dual-core split with single-loop fallback.
-- Heating mode pressure behavior is expected to track ambient changes when compressor is running.
-
-## Build and Flash
+The active firmware now lives in the unified project:
 
 ```bash
-cd "trainers/heat-pump/firmware"
+cd "trainers/unified-master/firmware"
 pio run -e usb
-pio run -e usb -t upload
 ```
+
+Use `tools/flash-unified.ps1 -Target heatpump ...` for uploads so the board keeps the correct heat-pump identity and trainer number.
 
 ## Validation Checklist
 

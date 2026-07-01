@@ -1,4 +1,4 @@
-﻿#include <Arduino.h>
+#include <Arduino.h>
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <ESPAsyncWebServer.h>
@@ -14,15 +14,29 @@
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include <HTTPClient.h>
+#include "main.h"
+#include <AsyncMqttClient.h>
+#include "FurnaceController.h"
+#include "PhysicsEngine.h"
+#include "TrainerInstance.h"
 
 // ==========================================
 // DOCKER ENGINE LINK
 // ==========================================
 const char* ENGINE_CONFIG_FILE = "/engine.json";
 String engine_base_url = "";
-const char* EDGE_ID = "heat_pump_trainer_01";
-const char* EDGE_LABEL = "Heat Pump Trainer 01";
-const char* TRAINER_TYPE = "heat_pump";
+String EDGE_ID_HEAT_PUMP = "";
+String EDGE_LABEL_HEAT_PUMP = "";
+const char* TRAINER_TYPE_HEAT_PUMP = "heat_pump";
+String EDGE_ID_FURNACE = "";
+String EDGE_LABEL_FURNACE = "";
+const char* TRAINER_TYPE_FURNACE = "straight_ac_furnace";
+String EDGE_ID = "";
+String EDGE_LABEL = "";
+const char* TRAINER_TYPE = TRAINER_TYPE_HEAT_PUMP;
+const uint16_t TRAINER_INSTANCE_ID = TRAINER_INSTANCE;
+bool is_identity_resolved = false;
+String OTA_HOSTNAME = "";
 const uint32_t ENGINE_HEARTBEAT_INTERVAL_MS = 200;
 const uint32_t ENGINE_DISCOVERY_RETRY_MS = 15000;
 uint32_t engine_heartbeat_timer = 0;
@@ -43,10 +57,36 @@ const int PIN_W = 7;
 const int PIN_Y = 6;
 const int PIN_O = 5;
 const int PIN_G = 4;
+const int PIN_IDENTITY = 14;
+const int PIN_BLOWER_MONITOR = 10;
+const int PIN_GAS_VALVE_MONITOR = 11;
 
-Adafruit_NeoPixel status_led(1, 48, NEO_GRB + NEO_KHZ800);
+enum TrainerType {
+  HEAT_PUMP,
+  STRAIGHT_AC_FURNACE
+};
+
+TrainerType active_trainer_type = HEAT_PUMP;
+bool identity_pin_boot_is_low = false;
+
+const uint16_t STATUS_LED_PIXEL_COUNT = 4;
+const uint16_t STATUS_LED_PRIMARY_INDEX = 0;
+const uint16_t STATUS_LED_OTA_MARKER_INDEX = 3;
+Adafruit_NeoPixel status_led(STATUS_LED_PIXEL_COUNT, 48, NEO_GRB + NEO_KHZ800);
 uint32_t led_timer = 0;
 bool ota_in_progress = false; 
+
+enum LedControlMode {
+  LED_MODE_STATUS,
+  LED_MODE_TEST,
+  LED_MODE_MANUAL
+};
+
+LedControlMode led_control_mode = LED_MODE_STATUS;
+uint32_t led_manual_colors[STATUS_LED_PIXEL_COUNT] = {0, 0, 0, 0};
+uint16_t led_test_index = 0;
+uint8_t led_test_color_step = 0;
+uint32_t led_test_interval_ms = 450;
 
 DNSServer dnsServer;
 bool is_ap_mode = false; 
@@ -132,9 +172,21 @@ String authRole = "";
 uint32_t authExpiry = 0;
 const uint32_t AUTH_TOKEN_TTL = 28800;
 uint32_t wifi_reconnect_timer = 0;
+bool wifi_was_connected = false;
+uint32_t wifi_disconnected_since = 0;
+uint32_t wifi_connected_flash_until = 0;
+const uint32_t WIFI_CONNECTING_GRACE_MS = 15000;
+const uint32_t WIFI_CONNECTED_FLASH_MS = 10000;
+const uint32_t WIFI_AP_FAILOVER_MS = 60000;
 bool pending_reboot = false;
 uint32_t reboot_timer = 0;
 bool i2c_boards_present = false;
+AsyncMqttClient mqttClient;
+TimerHandle_t mqttReconnectTimer;
+
+FurnaceController furnace_controller(board_2, i2c_boards_present);
+PhysicsEngine furnace_physics;
+
 bool hb_last_w = false;
 bool hb_last_y = false;
 bool hb_last_o = false;
@@ -150,10 +202,119 @@ const uint32_t CONTROL_TASK_SLICE_MS = 10;
 
 void reset_all_faults_and_sims();
 void handleDiagnosis(String submitted);
+void detectTrainerTypeAtBoot();
+void applyTrainerIdentityMetadata();
+void runHeatPumpControlSlice();
+void runFurnaceControlSlice();
+void syncFurnaceTelemetryToUnifiedState();
 void runCommsSlice();
 void runControlSlice();
 void commTask(void* parameter);
 void controlTask(void* parameter);
+uint32_t getModeConnectedLedColor();
+void connectToMqtt();
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total);
+void setStatusLeds(uint32_t primaryColor, bool otaMarkerBlue = false, uint8_t otaBlueLevel = 255);
+const char* getLedModeName();
+uint8_t clampColorByte(int value);
+void applyManualLeds();
+void stepLedTestPattern();
+
+bool readOptoActiveLow(int pin) {
+  return digitalRead(pin) == LOW;
+}
+
+uint32_t getModeConnectedLedColor() {
+  // Connected Wi-Fi indication is always green for clear field diagnostics.
+  return status_led.Color(0, 255, 0);
+}
+
+void setStatusLeds(uint32_t primaryColor, bool otaMarkerBlue, uint8_t otaBlueLevel) {
+  status_led.setPixelColor(STATUS_LED_PRIMARY_INDEX, primaryColor);
+  for (uint16_t i = 1; i < status_led.numPixels(); i++) {
+    if (otaMarkerBlue && i == STATUS_LED_OTA_MARKER_INDEX) {
+      status_led.setPixelColor(i, status_led.Color(0, 0, otaBlueLevel));
+    } else {
+      status_led.setPixelColor(i, 0);
+    }
+  }
+  status_led.show();
+}
+
+const char* getLedModeName() {
+  switch (led_control_mode) {
+    case LED_MODE_TEST: return "test";
+    case LED_MODE_MANUAL: return "manual";
+    default: return "status";
+  }
+}
+
+uint8_t clampColorByte(int value) {
+  if (value < 0) return 0;
+  if (value > 255) return 255;
+  return static_cast<uint8_t>(value);
+}
+
+void applyManualLeds() {
+  for (uint16_t i = 0; i < status_led.numPixels(); i++) {
+    status_led.setPixelColor(i, led_manual_colors[i]);
+  }
+  status_led.show();
+}
+
+void stepLedTestPattern() {
+  uint32_t testColor;
+  switch (led_test_color_step) {
+    case 0: testColor = status_led.Color(255, 0, 0); break;
+    case 1: testColor = status_led.Color(0, 255, 0); break;
+    case 2: testColor = status_led.Color(0, 0, 255); break;
+    default: testColor = status_led.Color(255, 255, 255); break;
+  }
+
+  for (uint16_t i = 0; i < status_led.numPixels(); i++) {
+    status_led.setPixelColor(i, (i == led_test_index) ? testColor : 0);
+  }
+  status_led.show();
+
+  led_test_index++;
+  if (led_test_index >= status_led.numPixels()) {
+    led_test_index = 0;
+    led_test_color_step = (led_test_color_step + 1) % 4;
+  }
+}
+
+String formatTrainerInstance() {
+  char instance[8];
+  snprintf(instance, sizeof(instance), "%02u", TRAINER_INSTANCE_ID);
+  return String(instance);
+}
+
+void detectTrainerTypeAtBoot() {
+  pinMode(PIN_IDENTITY, INPUT_PULLUP);
+  delay(10);
+  identity_pin_boot_is_low = (digitalRead(PIN_IDENTITY) == LOW);
+  active_trainer_type = identity_pin_boot_is_low ? STRAIGHT_AC_FURNACE : HEAT_PUMP;
+}
+
+void applyTrainerIdentityMetadata() {
+  String instance = formatTrainerInstance(); // e.g., "01"
+
+  // Simplified, consistent naming scheme based on the embedded trainer number.
+  // This is used for BLE name, mDNS hostname, and backend identification.
+  EDGE_ID = "trainer" + instance;
+  EDGE_LABEL = "Trainer" + instance;
+  OTA_HOSTNAME = "trainer" + instance;
+
+  // Set the trainer type for control logic, but it no longer affects the name.
+  if (active_trainer_type == STRAIGHT_AC_FURNACE) {
+    TRAINER_TYPE = TRAINER_TYPE_FURNACE;
+  } else {
+    TRAINER_TYPE = TRAINER_TYPE_HEAT_PUMP;
+  }
+
+  // With a hardcoded trainer number, the identity is always considered resolved at boot.
+  is_identity_resolved = true;
+}
 
 bool probePcf8575(uint8_t addr) {
   Wire.beginTransmission(addr);
@@ -176,7 +337,7 @@ String loadEngineBaseUrl() {
   if (!LittleFS.exists(ENGINE_CONFIG_FILE)) return String();
   File f = LittleFS.open(ENGINE_CONFIG_FILE, FILE_READ);
   if (!f) return String();
-  DynamicJsonDocument doc(256);
+  JsonDocument doc;
   DeserializationError error = deserializeJson(doc, f);
   f.close();
   if (error) return String();
@@ -187,7 +348,7 @@ void saveEngineBaseUrl(const String& baseUrl) {
   if (baseUrl.length() == 0) return;
   File f = LittleFS.open(ENGINE_CONFIG_FILE, FILE_WRITE);
   if (!f) return;
-  DynamicJsonDocument doc(256);
+  JsonDocument doc;
   doc["base_url"] = baseUrl;
   serializeJson(doc, f);
   f.close();
@@ -385,6 +546,27 @@ String getStatusJSON() {
   doc["reset_counter"] = reset_counter;
   doc["ble_login_status"] = ble_login_status;
   doc["trainer_type"] = TRAINER_TYPE;
+  bool identity_pin_live_is_low = (digitalRead(PIN_IDENTITY) == LOW);
+  doc["identity_pin_gpio"] = PIN_IDENTITY;
+  doc["identity_pin_boot_level"] = identity_pin_boot_is_low ? 0 : 1;
+  doc["identity_pin_live_level"] = identity_pin_live_is_low ? 0 : 1;
+  doc["identity_reboot_required"] = (identity_pin_live_is_low != identity_pin_boot_is_low) ? 1 : 0;
+  doc["identity_latched_on_boot"] = true;
+  if (active_trainer_type == STRAIGHT_AC_FURNACE) {
+    doc["furnace_cfm"] = round(furnace_physics.getSimulatedCfm() * 10.0f) / 10.0f;
+    doc["furnace_static_pressure"] = round(furnace_physics.getStaticPressure() * 100.0f) / 100.0f;
+    doc["furnace_telemetry_state"] = furnace_physics.getTelemetryState();
+    doc["furnace_flame_active"] = furnace_physics.isFlameActive() ? 1 : 0;
+    doc["furnace_blower_running"] = furnace_physics.isBlowerRunning() ? 1 : 0;
+    doc["furnace_high_limit"] = furnace_physics.isHighLimitTripped() ? 1 : 0;
+    doc["gas_valve_monitor"] = readOptoActiveLow(PIN_GAS_VALVE_MONITOR) ? 1 : 0;
+    doc["blower_monitor"] = readOptoActiveLow(PIN_BLOWER_MONITOR) ? 1 : 0;
+    doc["relay_inducer"] = furnace_controller.isInducerOn() ? 1 : 0;
+    doc["relay_igniter"] = furnace_controller.isIgniterOn() ? 1 : 0;
+    doc["relay_gas_valve"] = furnace_controller.isGasValveOn() ? 1 : 0;
+    doc["relay_heat_blower"] = furnace_controller.isHeatBlowerOn() ? 1 : 0;
+    doc["furnace_state"] = furnace_controller.getFurnaceState();
+  }
   if (ble_login_status == "success" && authToken.length() > 0) {
     doc["auth_token"] = authToken;
   }
@@ -519,6 +701,26 @@ String generateAuthToken() {
   return String(buf);
 }
 
+void forwardDiagnosisToEngine(const String& diagnosis) {
+  if (engine_base_url.length() == 0) {
+    Serial.println("Cannot forward diagnosis, engine URL unknown.");
+    return;
+  }
+
+  HTTPClient http;
+  // URL encode the diagnosis string to handle spaces.
+  String diagnosis_encoded = diagnosis;
+  diagnosis_encoded.replace(" ", "%20");
+
+  String url = engine_base_url + "/api/submit?edge_id=" + EDGE_ID + "&diagnosis=" + diagnosis_encoded;
+  http.begin(url);
+  
+  int httpCode = http.POST(""); // Send empty body as data is now in the query string.
+
+  Serial.printf("Forwarded diagnosis to engine, status: %d\n", httpCode);
+  http.end();
+}
+
 class MyCallbacks: public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string rxValue = pCharacteristic->getValue();
@@ -542,7 +744,7 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
         if (!doc["diagnosis"].isNull()) {
           String submitted = doc["diagnosis"].as<String>();
           Serial.printf("Submitting Diagnosis over BLE: %s\n", submitted.c_str());
-          handleDiagnosis(submitted);
+          forwardDiagnosisToEngine(submitted);
         }
         
         // --- NEW: BLE USER LOGIN CHECK ---
@@ -573,12 +775,9 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 void setupBLE() {
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  char bleName[25];
-  sprintf(bleName, "VestaCore%02X%02X", mac[4], mac[5]);
-  
-  NimBLEDevice::init(bleName);
+  // Use the global EDGE_LABEL, which is set correctly in applyTrainerIdentityMetadata.
+  // This avoids using a local variable that goes out of scope, which was the cause of the bug.
+  NimBLEDevice::init(EDGE_LABEL.c_str());
   NimBLEDevice::setMTU(512); // Request maximum MTU for faster/larger payload transfers
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -588,15 +787,13 @@ void setupBLE() {
   NimBLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pRxCharacteristic->setCallbacks(new MyCallbacks());
 
-  // --- CRUCIAL FIX: START THE SERVICE FIRST! ---
-  pService->start(); 
-
   // Start the server
   pServer->start(); 
 
   // --- START SERVER ADVERTISING ---
   NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setName(EDGE_LABEL.c_str());
   pAdvertising->enableScanResponse(true); 
   pAdvertising->start();
 }
@@ -693,10 +890,51 @@ void handleDiagnosis(String submitted) {
   force_telemetry_update = true;
 }
 
+void onMqttConnect(bool sessionPresent) {
+  Serial.println("Connected to MQTT.");
+  String topic = "trainer/" + EDGE_ID + "/command";
+  mqttClient.subscribe(topic.c_str(), 1);
+  Serial.printf("Subscribed to MQTT topic: %s\n", topic.c_str());
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.println("Disconnected from MQTT.");
+  if (WiFi.isConnected()) {
+    xTimerStart(mqttReconnectTimer, 0);
+  }
+}
+
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  payload[len] = '\0';
+  Serial.printf("MQTT Message Received: [%s] %s\n", topic, payload);
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    Serial.printf("MQTT JSON deserialize error: %s\n", error.c_str());
+    return;
+  }
+
+  const char* action = doc["action"];
+  if (action && strcmp(action, "reboot") == 0) {
+    Serial.println("Reboot command received via MQTT. Rebooting in 150ms.");
+    pending_reboot = true;
+    reboot_timer = millis() + 150;
+  } else if (action && strcmp(action, "reset") == 0) {
+    Serial.println("Reset command received via MQTT.");
+    reset_all_faults_and_sims();
+    force_telemetry_update = true;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+  // --- FIX: Determine identity FIRST, so all subsequent services get the right name ---
+  detectTrainerTypeAtBoot();
+  applyTrainerIdentityMetadata();
+
   status_led.begin(); status_led.setBrightness(100);
-  status_led.setPixelColor(0, status_led.Color(200, 100, 0)); status_led.show();
+  setStatusLeds(getModeConnectedLedColor());
 
   setupBLE(); // Initialize BLE early to secure memory and RF coexistence before WiFi
 
@@ -709,12 +947,16 @@ void setup() {
     wifi_pass = "8037945526";
   }
 
+  Serial.printf("Trainer identity pin GPIO%d => mode: %s\n", PIN_IDENTITY, TRAINER_TYPE);
+
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
 
   Serial.printf("WiFi attempting SSID: '%s'\n", wifi_ssid.c_str());
+  setStatusLeds(status_led.Color(255, 180, 0)); // Yellow while connecting to Wi-Fi
+  wifi_disconnected_since = millis();
   WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
@@ -732,48 +974,72 @@ void setup() {
 
   if (WiFi.status() == WL_CONNECTED) {
     is_ap_mode = false;
+    wifi_was_connected = true;
+    wifi_disconnected_since = 0;
+    wifi_connected_flash_until = millis() + WIFI_CONNECTED_FLASH_MS;
     Serial.println("\nWiFi connected.");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    engine_base_url = loadEngineBaseUrl();
+
+    // --- FIX: Discover engine URL once at startup and use it for both HTTP and MQTT ---
+    engine_base_url = discoverEngineBaseUrl(true); // Allow stored value first
     if (engine_base_url.length() == 0) {
-      IPAddress gateway = WiFi.gatewayIP();
-      if (gateway != IPAddress(0, 0, 0, 0)) {
-        engine_base_url = "http://" + gateway.toString() + ":8000";
-      }
+      engine_base_url = discoverEngineBaseUrl(false); // Force discovery if not stored
     }
+    if (engine_base_url.length() > 0) {
+      saveEngineBaseUrl(engine_base_url);
+    }
+
     Serial.printf("Engine endpoint: %s\n", engine_base_url.c_str());
-    if (MDNS.begin("trainer2")) {
-      Serial.println("MDNS responder started! Domain: trainer2.local");
+    if (MDNS.begin(OTA_HOSTNAME.c_str())) {
+      Serial.printf("MDNS responder started! Domain: %s.local\n", OTA_HOSTNAME.c_str());
       MDNS.addService("http", "tcp", 80); 
     }
     configTzTime("EST5EDT,M3.2.0,M11.1.0", "pool.ntp.org", "time.nist.gov");
 
+    // --- MQTT SETUP ---
+    mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
+    IPAddress mqtt_host;
+    String mqtt_host_str = engine_base_url;
+    mqtt_host_str.replace("http://", "");
+    int port_index = mqtt_host_str.indexOf(':');
+    if (port_index != -1) { mqtt_host_str = mqtt_host_str.substring(0, port_index); }
+    if (mqtt_host_str.length() > 0 && mqtt_host.fromString(mqtt_host_str)) {
+        mqttClient.setServer(mqtt_host, 1883);
+        mqttClient.onConnect(onMqttConnect);
+        mqttClient.onDisconnect(onMqttDisconnect);
+        mqttClient.onMessage(onMqttMessage);
+        connectToMqtt();
+    } else {
+      Serial.printf("Failed to configure MQTT host from engine URL: %s\n", engine_base_url.c_str());
+    }
+
   } else {
     is_ap_mode = true;
+    wifi_was_connected = false;
     WiFi.mode(WIFI_AP);
     setup_ap_active = WiFi.softAP("Vesta Core Trainer", "8037945526"); 
     dnsServer.start(53, "*", WiFi.softAPIP()); 
   }
   
-  ArduinoOTA.setHostname("trainer2");
+  ArduinoOTA.setHostname(OTA_HOSTNAME.c_str());
+  ArduinoOTA.setPort(3232);
+  ArduinoOTA.setPassword("Mitchell2019!");
+  Serial.printf("Arduino OTA hostname: %s.local\n", OTA_HOSTNAME.c_str());
   ArduinoOTA.onStart([]() {
     ota_in_progress = true;
-    status_led.setPixelColor(0, status_led.Color(0, 0, 255)); // Solid blue
-    status_led.show();
+    setStatusLeds(status_led.Color(0, 0, 255), true, 255); // Main + OTA marker blue
     String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
     Serial.println("Start updating " + type);
   });
   ArduinoOTA.onEnd([]() {
     ota_in_progress = false;
-    status_led.setPixelColor(0, status_led.Color(0, 255, 0)); // Green on success
-    status_led.show();
+    setStatusLeds(status_led.Color(0, 255, 0)); // Green on success
     Serial.println("\nEnd");
   });
   ArduinoOTA.onError([](ota_error_t error) {
     ota_in_progress = false;
-    status_led.setPixelColor(0, status_led.Color(255, 0, 0)); // Red on error
-    status_led.show();
+    setStatusLeds(status_led.Color(255, 0, 0)); // Red on error
     Serial.printf("OTA Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -783,11 +1049,13 @@ void setup() {
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     uint8_t blue_val = 50 + ((progress * 205) / total); // Ramps brightness dynamically from dim to max
-    status_led.setPixelColor(0, status_led.Color(0, 0, blue_val)); status_led.show();
+    setStatusLeds(status_led.Color(0, 0, blue_val), true, blue_val);
   });
   ArduinoOTA.begin();
 
   pinMode(PIN_W, INPUT_PULLUP); pinMode(PIN_Y, INPUT_PULLUP); pinMode(PIN_O, INPUT_PULLUP); pinMode(PIN_G, INPUT_PULLUP);
+  pinMode(PIN_BLOWER_MONITOR, INPUT_PULLUP);
+  pinMode(PIN_GAS_VALVE_MONITOR, INPUT_PULLUP);
 
   bool wire_ok = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   if (!wire_ok) {
@@ -802,6 +1070,13 @@ void setup() {
     board_3.begin();
   }
   reset_all_faults_and_sims();
+  if (active_trainer_type == STRAIGHT_AC_FURNACE) {
+    furnace_controller.begin();
+    furnace_physics.begin();
+    furnace_physics.setAmbient(set_od_temp, set_id_temp, set_rh);
+    furnace_physics.setRefrigerant(current_refrigerant, id_is_txv);
+    syncFurnaceTelemetryToUnifiedState();
+  }
 
   ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
     if (type == WS_EVT_CONNECT) { client->text(getStatusJSON()); }
@@ -809,6 +1084,36 @@ void setup() {
   server.addHandler(&ws);
 
   // --- OTA Update via Web Browser ---
+  server.on("/api/identity/set", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("edge_id") && request->hasParam("label")) {
+      EDGE_ID = request->getParam("edge_id")->value();
+      EDGE_LABEL = request->getParam("label")->value();
+      is_identity_resolved = true;
+      // Persist this identity for next boot if needed in future
+      Serial.printf("Identity resolved from backend: ID=%s, Label=%s\n", EDGE_ID.c_str(), EDGE_LABEL.c_str());
+      setupBLE(); // Re-initialize BLE to broadcast the new name
+      force_telemetry_update = true;
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+    request->send(400, "text/plain", "Bad Request");
+  });
+
+  server.on("/api/command", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("action")) {
+      String action = request->getParam("action")->value();
+      if (action == "reset") {
+        reset_all_faults_and_sims();
+        force_telemetry_update = true;
+        request->send(200, "text/plain", "OK");
+        return;
+      }
+    }
+    request->send(400, "text/plain", "Bad Request");
+  });
+
+
+
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "text/html", 
       "<form method='POST' action='/update' enctype='multipart/form-data'>"
@@ -827,18 +1132,19 @@ void setup() {
   }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
     if (!index) {
       ota_in_progress = true;
-      status_led.setPixelColor(0, status_led.Color(0, 0, 255)); status_led.show();
+      setStatusLeds(status_led.Color(0, 0, 255), true, 255);
       Serial.printf("Update Start: %s\n", filename.c_str());
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
     }
     if (len) { if (Update.write(data, len) != len) { Update.printError(Serial); } }
     if (final) {
       ota_in_progress = false;
-      if (Update.end(false)) {
-        status_led.setPixelColor(0, status_led.Color(0, 255, 0)); status_led.show();
+      // Accept exact uploaded image length; do not require filling the entire OTA slot.
+      if (Update.end(true)) {
+        setStatusLeds(status_led.Color(0, 255, 0));
         Serial.printf("Update Success: %uB\n", index + len);
       } else {
-        status_led.setPixelColor(0, status_led.Color(255, 0, 0)); status_led.show();
+        setStatusLeds(status_led.Color(255, 0, 0));
         Update.printError(Serial);
       }
     }
@@ -873,7 +1179,7 @@ void setup() {
   [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, data, len);
-    if (!error && doc.containsKey("user") && doc.containsKey("pass")) {
+    if (!error && !doc["user"].isNull() && !doc["pass"].isNull()) {
       File f = LittleFS.open("/users.json", FILE_READ);
       JsonDocument db; deserializeJson(db, f); f.close();
       String newUser = doc["user"].as<String>(); newUser.toLowerCase();
@@ -976,6 +1282,135 @@ void setup() {
       force_telemetry_update = true; 
       request->send(200, "text/plain", "OK");
     } else { request->send(400, "text/plain", "Bad Request"); }
+  });
+
+  server.on("/api/engine", HTTP_GET, [](AsyncWebServerRequest *request){
+    String payload = "{";
+    payload += "\"engineBaseUrl\":\"" + engine_base_url + "\"";
+    payload += "}";
+    request->send(200, "application/json", payload);
+  });
+
+  server.on("/api/engine", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("url")) {
+      request->send(400, "text/plain", "Missing url");
+      return;
+    }
+
+    String submitted = request->getParam("url")->value();
+    submitted.trim();
+    if (!submitted.startsWith("http://") && !submitted.startsWith("https://")) {
+      request->send(400, "text/plain", "URL must start with http:// or https://");
+      return;
+    }
+
+    engine_base_url = submitted;
+    saveEngineBaseUrl(engine_base_url);
+    next_engine_discovery_ms = 0;
+    engine_heartbeat_timer = 0;
+    request->send(200, "text/plain", "OK");
+  });
+
+  server.on("/api/identity", HTTP_GET, [](AsyncWebServerRequest *request){
+    bool identity_pin_live_is_low = (digitalRead(PIN_IDENTITY) == LOW);
+    bool reboot_required = (identity_pin_live_is_low != identity_pin_boot_is_low);
+
+    JsonDocument doc;
+    doc["trainer_type"] = TRAINER_TYPE;
+    doc["identity_pin_gpio"] = PIN_IDENTITY;
+    doc["identity_pin_boot_level"] = identity_pin_boot_is_low ? 0 : 1;
+    doc["identity_pin_live_level"] = identity_pin_live_is_low ? 0 : 1;
+    doc["identity_reboot_required"] = reboot_required;
+    doc["note"] = "GPIO14 identity is sampled once at boot. Reboot required after strap change.";
+
+    String payload;
+    serializeJson(doc, payload);
+    request->send(200, "application/json", payload);
+  });
+
+  server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
+    pending_reboot = true;
+    reboot_timer = millis() + 150;
+    request->send(200, "text/plain", "Reboot scheduled");
+  });
+
+  server.on("/api/led/mode", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("mode")) {
+      request->send(400, "text/plain", "Missing mode");
+      return;
+    }
+
+    String mode = request->getParam("mode")->value();
+    mode.toLowerCase();
+
+    if (mode == "status") {
+      led_control_mode = LED_MODE_STATUS;
+      setStatusLeds(getModeConnectedLedColor());
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+
+    if (mode == "test") {
+      if (request->hasParam("interval")) {
+        int interval = request->getParam("interval")->value().toInt();
+        if (interval >= 100 && interval <= 5000) {
+          led_test_interval_ms = static_cast<uint32_t>(interval);
+        }
+      }
+      led_control_mode = LED_MODE_TEST;
+      led_test_index = 0;
+      led_test_color_step = 0;
+      led_timer = 0;
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+
+    if (mode == "manual") {
+      led_control_mode = LED_MODE_MANUAL;
+      applyManualLeds();
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+
+    request->send(400, "text/plain", "Invalid mode. Use status|test|manual");
+  });
+
+  server.on("/api/led/set", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("r") || !request->hasParam("g") || !request->hasParam("b")) {
+      request->send(400, "text/plain", "Missing r,g,b");
+      return;
+    }
+
+    uint8_t r = clampColorByte(request->getParam("r")->value().toInt());
+    uint8_t g = clampColorByte(request->getParam("g")->value().toInt());
+    uint8_t b = clampColorByte(request->getParam("b")->value().toInt());
+    uint32_t color = status_led.Color(r, g, b);
+
+    if (request->hasParam("index")) {
+      int index = request->getParam("index")->value().toInt();
+      if (index < 0 || index >= status_led.numPixels()) {
+        request->send(400, "text/plain", "Index out of range");
+        return;
+      }
+      led_manual_colors[index] = color;
+    } else {
+      for (uint16_t i = 0; i < status_led.numPixels(); i++) {
+        led_manual_colors[i] = color;
+      }
+    }
+
+    led_control_mode = LED_MODE_MANUAL;
+    applyManualLeds();
+    request->send(200, "text/plain", "OK");
+  });
+
+  server.on("/api/led/status", HTTP_GET, [](AsyncWebServerRequest *request){
+    String payload = "{";
+    payload += "\"mode\":\"" + String(getLedModeName()) + "\"";
+    payload += ",\"pixels\":" + String(status_led.numPixels());
+    payload += ",\"testIntervalMs\":" + String(led_test_interval_ms);
+    payload += "}";
+    request->send(200, "application/json", payload);
   });
 
   server.onNotFound([](AsyncWebServerRequest *request){
@@ -1171,6 +1606,10 @@ void sendEngineHeartbeat() {
   doc["uptime"] = uptime_str;
   doc["temp"] = 0.0;
 
+  // Add live identity pin status to notify UI if a reboot is needed after strap change.
+  bool identity_pin_live_is_low = (digitalRead(PIN_IDENTITY) == LOW);
+  doc["identity_reboot_required"] = (identity_pin_live_is_low != identity_pin_boot_is_low);
+
   String payload;
   serializeJson(doc, payload);
 
@@ -1221,14 +1660,45 @@ void sendEngineHeartbeat() {
 
 uint32_t heartbeat_timer = 0;
 void handle_system_health() {
-  if (ota_in_progress) return; 
   uint32_t now = millis();
   if (now >= led_timer) {
-    led_timer = now + 1000; 
-    if (is_ap_mode) { status_led.setPixelColor(0, status_led.Color(150, 0, 150)); } 
-    else if (WiFi.status() == WL_CONNECTED) { status_led.setPixelColor(0, status_led.Color(0, 255, 0)); } 
-    else { status_led.setPixelColor(0, status_led.Color(255, 0, 0)); }
-    status_led.show();
+    if (led_control_mode == LED_MODE_TEST) {
+      led_timer = now + led_test_interval_ms;
+      stepLedTestPattern();
+    } else if (led_control_mode == LED_MODE_MANUAL) {
+      led_timer = now + 1000;
+      applyManualLeds();
+    } else {
+      if (ota_in_progress) {
+        // Blue flash during OTA operations.
+        bool on_phase = ((now / 400) % 2) == 0;
+        led_timer = now + 200;
+        setStatusLeds(on_phase ? status_led.Color(0, 0, 255) : 0, true, on_phase ? 255 : 0);
+        if (now >= heartbeat_timer) { heartbeat_timer = now + 500; notifyClients(); }
+        return;
+      }
+
+      uint32_t mainColor;
+      led_timer = now + 500;
+      if (is_ap_mode) {
+        mainColor = status_led.Color(170, 0, 170); // Purple while AP mode is active
+      } else if (WiFi.status() == WL_CONNECTED) {
+        if (now < wifi_connected_flash_until) {
+          bool on_phase = ((now / 1000) % 2) == 0; // Slow green flash on successful connect
+          mainColor = on_phase ? status_led.Color(0, 255, 0) : 0;
+        } else {
+          // Normal connected mode: solid green
+          mainColor = getModeConnectedLedColor();
+        }
+      } else {
+        if (wifi_disconnected_since == 0 || (now - wifi_disconnected_since) < WIFI_CONNECTING_GRACE_MS) {
+          mainColor = status_led.Color(255, 180, 0); // Yellow while attempting to connect/reconnect
+        } else {
+          mainColor = status_led.Color(255, 0, 0); // Red on persistent connection issue
+        }
+      }
+      setStatusLeds(mainColor);
+    }
   }
   if (now >= heartbeat_timer) { heartbeat_timer = now + 500; notifyClients(); } 
 }
@@ -1647,9 +2117,33 @@ void handle_simulations() {
 }
 
 void runCommsSlice() {
+  bool wifi_connected = (WiFi.status() == WL_CONNECTED);
+  if (wifi_connected && !wifi_was_connected) {
+    wifi_connected_flash_until = millis() + WIFI_CONNECTED_FLASH_MS;
+    wifi_disconnected_since = 0;
+  } else if (!wifi_connected && wifi_was_connected && wifi_disconnected_since == 0) {
+    wifi_disconnected_since = millis();
+  }
+  wifi_was_connected = wifi_connected;
+
   if (is_ap_mode || setup_ap_active) { dnsServer.processNextRequest(); }
   else if (wifi_ssid.length() > 0 && WiFi.status() != WL_CONNECTED) {
     uint32_t now = millis();
+    if (wifi_disconnected_since == 0) {
+      wifi_disconnected_since = now;
+    }
+
+    if ((now - wifi_disconnected_since) >= WIFI_AP_FAILOVER_MS) {
+      Serial.println("WiFi reconnect timeout. Switching to AP mode.");
+      is_ap_mode = true;
+      WiFi.mode(WIFI_AP);
+      setup_ap_active = WiFi.softAP("Vesta Core Trainer", "8037945526");
+      dnsServer.start(53, "*", WiFi.softAPIP());
+      wifi_reconnect_timer = now;
+      wifi_disconnected_since = now;
+      return;
+    }
+
     if (now - wifi_reconnect_timer >= 10000) {
       wifi_reconnect_timer = now;
       Serial.println("WiFi disconnected. Attempting reconnect...");
@@ -1692,11 +2186,79 @@ void runCommsSlice() {
   handle_system_health();
 }
 
-void runControlSlice() {
+void syncFurnaceTelemetryToUnifiedState() {
+  sim_comp_amps = furnace_physics.getCompAmps();
+  sim_od_fan_amps = furnace_physics.getOdFanAmps();
+  sim_id_fan_amps = furnace_physics.getIdFanAmps();
+  sim_hs_amps = 0.0f;
+
+  phys_lps_tripped = furnace_physics.isLpsTripped();
+  phys_hps_tripped = furnace_physics.isHpsTripped();
+
+  sim_od_low_press = furnace_physics.getOdLowPress();
+  sim_od_high_press = furnace_physics.getOdHighPress();
+  sim_od_liquid_press = furnace_physics.getOdLiquidPress();
+  sim_od_suction_temp = furnace_physics.getOdSuctionTemp();
+  sim_od_liquid_temp = furnace_physics.getOdLiquidTemp();
+  sim_od_discharge = furnace_physics.getOdDischargeTemp();
+  sim_od_ambient = furnace_physics.getOdAmbient();
+
+  sim_id_ambient = furnace_physics.getIdAmbient();
+  sim_id_return_temp = furnace_physics.getIdReturnTemp();
+  sim_id_supply_temp = furnace_physics.getIdSupplyTemp();
+  sim_id_rh = furnace_physics.getIdRh();
+}
+
+void runHeatPumpControlSlice() {
   handle_hvac_logic();
   handle_telemetry();
   if (i2c_boards_present) {
     handle_simulations();
+  }
+}
+
+void runFurnaceControlSlice() {
+  bool current_w = readDebounced(PIN_W, state_w, debounce_w);
+  bool current_y = readDebounced(PIN_Y, state_y, debounce_y);
+  bool current_g = readDebounced(PIN_G, state_g, debounce_g);
+  state_o = false;
+
+  bool send_update = (current_w != last_w_state) ||
+                     (current_y != last_y_state) ||
+                     (current_g != last_g_state);
+
+  bool gas_valve_active = readOptoActiveLow(PIN_GAS_VALVE_MONITOR);
+  bool blower_running = readOptoActiveLow(PIN_BLOWER_MONITOR);
+
+  furnace_controller.update(current_w, furnace_physics.getIdSupplyTemp());
+  furnace_physics.setAmbient(set_od_temp, set_id_temp, set_rh);
+  furnace_physics.setRefrigerant(current_refrigerant, id_is_txv);
+  furnace_physics.update(current_y, gas_valve_active, current_g, blower_running, fault_active);
+  syncFurnaceTelemetryToUnifiedState();
+
+  if (i2c_boards_present) {
+    board_3.digitalWrite(6, (phys_lps_tripped || fault_active[7] || fault_active[26]) ? LOW : HIGH);
+    board_3.digitalWrite(7, (phys_hps_tripped || fault_active[8] || fault_active[27]) ? LOW : HIGH);
+  }
+
+  last_w_state = current_w;
+  last_y_state = current_y;
+  last_g_state = current_g;
+
+  if (send_update) {
+    notifyClients();
+  }
+}
+
+void runControlSlice() {
+  switch (active_trainer_type) {
+    case STRAIGHT_AC_FURNACE:
+      runFurnaceControlSlice();
+      break;
+    case HEAT_PUMP:
+    default:
+      runHeatPumpControlSlice();
+      break;
   }
 }
 
@@ -1725,4 +2287,9 @@ void loop() {
 
   vTaskDelay(pdMS_TO_TICKS(1000));
 
+}
+
+void connectToMqtt() {
+  Serial.println("Connecting to MQTT...");
+  mqttClient.connect();
 }

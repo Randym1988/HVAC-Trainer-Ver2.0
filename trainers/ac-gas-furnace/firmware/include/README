@@ -1,9 +1,0 @@
-Furnace firmware header directory.
-
-Use this folder for shared declarations that are intentionally public to
-multiple source units.
-
-Current guidance:
-- keep shared externs in `src/main.h` for local include resolution safety
-- avoid duplicating those extern definitions in multiple headers
-- place component-specific public interfaces in `src/*.h` next to implementation

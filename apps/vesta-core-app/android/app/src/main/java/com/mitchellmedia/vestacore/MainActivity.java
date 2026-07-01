@@ -23,4 +23,11 @@ public class MainActivity extends BridgeActivity {
             }, 101);
         }
     }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // Pass the bridge to the service so it can emit events to the webview
+        BluetoothLeService.bridge = getBridge();
+    }
 }

@@ -4,3 +4,4 @@ pydantic
 websockets
 zeroconf
 aiomqtt
+python-multipart

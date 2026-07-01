@@ -1,28 +1,17 @@
-# Furnace Trainer Firmware
+# Furnace Trainer Documentation
 
-This folder contains the AC/Gas furnace trainer firmware (ESP32-S3, PlatformIO).
+This folder now retains AC/gas furnace hardware documentation only.
 
-## Scope
+## Firmware Source
 
-- Furnace state machine and timing
-- Physics and telemetry generation
-- BLE + web API communications
-- Engine heartbeat/status sync
-
-## Key Source Files
-
-- `src/main.cpp` - startup, scheduling, shared globals
-- `src/FurnaceController.cpp` - furnace sequence/state logic
-- `src/PhysicsEngine.cpp` - pressure/temperature model
-- `src/CommManager.cpp` - BLE/web communication layer
-
-## Build and Flash
+The active firmware now lives in the unified project:
 
 ```bash
-cd "trainers/ac-gas-furnace/firmware"
+cd "trainers/unified-master/firmware"
 pio run -e usb
-pio run -e usb -t upload
 ```
+
+Use `tools/flash-unified.ps1 -Target furnace ...` for uploads so the board keeps the correct furnace identity and trainer number.
 
 ## Runtime Validation
 

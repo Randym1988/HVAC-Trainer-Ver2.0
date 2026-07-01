@@ -4,8 +4,11 @@ import random
 import os
 import socket
 import json
+import hmac
+import hashlib
+import secrets
 from contextlib import suppress
-from fastapi import FastAPI, Request, HTTPException, Response, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, Request, HTTPException, Response, Depends, WebSocket, WebSocketDisconnect, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -34,6 +37,161 @@ WS_BROADCAST_INTERVAL_SECONDS = 0.25
 MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
 mdns = None
 mdns_service_info = None
+USERS_DB_FILE = os.getenv("USERS_DB_FILE", "users.json")
+users_db: Dict[str, Dict[str, str]] = {}
+PBKDF2_ROUNDS = int(os.getenv("USER_PASSWORD_ROUNDS", "150000"))
+EDGES_DB_FILE = os.getenv("EDGES_DB_FILE", "edges.json")
+EDGES_SAVE_INTERVAL_SECONDS = float(os.getenv("EDGES_SAVE_INTERVAL_SECONDS", "5"))
+_last_edges_save_at = 0.0
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        bytes.fromhex(salt),
+        PBKDF2_ROUNDS,
+    ).hex()
+    return f"pbkdf2_sha256${PBKDF2_ROUNDS}${salt}${digest}"
+
+
+def verify_password(submitted: str, record: Dict[str, str]) -> bool:
+    encoded = str(record.get("pw_hash", ""))
+    if encoded.startswith("pbkdf2_sha256$"):
+        try:
+            _, rounds_str, salt_hex, expected_hex = encoded.split("$", 3)
+            rounds = int(rounds_str)
+            computed = hashlib.pbkdf2_hmac(
+                "sha256",
+                submitted.encode("utf-8"),
+                bytes.fromhex(salt_hex),
+                rounds,
+            ).hex()
+            return hmac.compare_digest(computed, expected_hex)
+        except Exception:
+            return False
+
+    # Legacy fallback for existing plaintext records; migrate on successful login.
+    legacy_pw = str(record.get("pw", ""))
+    return hmac.compare_digest(submitted, legacy_pw)
+
+
+def load_users_db() -> Dict[str, Dict[str, str]]:
+    defaults: Dict[str, Dict[str, str]] = {
+        "admin": {"pw": "admin", "role": "instructor"},
+        "student": {"pw": "student", "role": "student"},
+    }
+
+    if not os.path.exists(USERS_DB_FILE):
+        with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(defaults, f, indent=2)
+        return defaults
+
+    try:
+        with open(USERS_DB_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            for username, meta in defaults.items():
+                if username not in loaded:
+                    loaded[username] = meta
+            return loaded
+    except Exception:
+        pass
+
+    with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(defaults, f, indent=2)
+    return defaults
+
+
+def save_users_db() -> None:
+    with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(users_db, f, indent=2)
+
+
+def require_instructor_or_admin() -> None:
+    if state.authRole not in {"admin", "instructor"}:
+        raise HTTPException(status_code=401, detail="DENIED")
+
+
+def load_edges_db() -> Dict[str, Dict[str, Any]]:
+    try:
+        if not os.path.exists(EDGES_DB_FILE):
+            return {}
+        with open(EDGES_DB_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            return {}
+
+        restored: Dict[str, Dict[str, Any]] = {}
+        for edge_id, edge in loaded.items():
+            if not isinstance(edge, dict):
+                continue
+            safe_id = str(edge.get("edge_id") or edge_id).strip()
+            if not safe_id:
+                continue
+            incoming_type = str(edge.get("trainer_type") or "ac_gas").strip().lower().replace("-", "_").replace(" ", "_")
+            trainer_type = "heat_pump" if incoming_type in {"heat_pump", "heatpump", "hp"} else "ac_gas"
+            restored[safe_id] = {
+                "edge_id": safe_id,
+                "label": str(edge.get("label") or safe_id),
+                "source_ip": str(edge.get("source_ip") or ""),
+                "last_seen": float(edge.get("last_seen") or 0.0),
+                "trainer_type": trainer_type,
+                "mac": str(edge.get("mac") or "").lower(),
+                "w": bool(edge.get("w", False)),
+                "y": bool(edge.get("y", False)),
+                "g": bool(edge.get("g", False)),
+                "phys_lps": bool(edge.get("phys_lps", False)),
+                "phys_hps": bool(edge.get("phys_hps", False)),
+                "wifi_rssi": edge.get("wifi_rssi", -55),
+                "ram": edge.get("ram", 245760),
+                "uptime": edge.get("uptime", "00:00:00"),
+                "temp": edge.get("temp", 98.0),
+                "identity_reboot_required": bool(edge.get("identity_reboot_required", False)),
+                "telemetry": {},
+                "runtime": {},
+            }
+        return restored
+    except Exception:
+        return {}
+
+
+def save_edges_db(force: bool = False) -> None:
+    global _last_edges_save_at
+    now = time.time()
+    if not force and (now - _last_edges_save_at) < EDGES_SAVE_INTERVAL_SECONDS:
+        return
+
+    serializable: Dict[str, Dict[str, Any]] = {}
+    for edge_id, edge in state.edges.items():
+        if not isinstance(edge, dict):
+            continue
+        serializable[edge_id] = {
+            "edge_id": edge_id,
+            "label": edge.get("label", edge_id),
+            "source_ip": edge.get("source_ip", ""),
+            "last_seen": edge.get("last_seen", 0.0),
+            "trainer_type": edge.get("trainer_type", "ac_gas"),
+            "mac": str(edge.get("mac", "")).lower(),
+            "w": bool(edge.get("w", False)),
+            "y": bool(edge.get("y", False)),
+            "g": bool(edge.get("g", False)),
+            "phys_lps": bool(edge.get("phys_lps", False)),
+            "phys_hps": bool(edge.get("phys_hps", False)),
+            "wifi_rssi": edge.get("wifi_rssi", -55),
+            "ram": edge.get("ram", 245760),
+            "uptime": edge.get("uptime", "00:00:00"),
+            "temp": edge.get("temp", 98.0),
+            "identity_reboot_required": bool(edge.get("identity_reboot_required", False)),
+        }
+
+    try:
+        with open(EDGES_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(serializable, f, indent=2)
+        _last_edges_save_at = now
+    except Exception:
+        pass
 
 
 def resolve_host_ip() -> str:
@@ -160,6 +318,8 @@ class AppState:
         self.work_history_log = ""
         self.authRole = "none"
         self.simulation_cursor = 0
+        self.mobile_app_last_seen = 0.0
+        self.mobile_app_timeout_seconds = 15.0
 
     def reset_all_faults_and_sims(self):
         self.sim_active = [False] * 16
@@ -173,6 +333,7 @@ class AppState:
         self.heat_blower_on = False
 
 state = AppState()
+users_db = load_users_db()
 
 RUNTIME_EXCLUDED = {
     "edge_connected",
@@ -184,6 +345,8 @@ RUNTIME_EXCLUDED = {
     "edges",
     "authRole",
     "simulation_cursor",
+    "mobile_app_last_seen",
+    "mobile_app_timeout_seconds",
 }
 
 
@@ -288,10 +451,13 @@ def get_edges_payload() -> List[Dict[str, Any]]:
                 "ram": edge.get("ram"),
                 "uptime": edge.get("uptime"),
                 "temp": edge.get("temp"),
+                "identity_reboot_required": 1 if edge.get("identity_reboot_required") else 0,
             }
         )
 
-    rows.sort(key=lambda x: (x["connected"], x["last_seen"]), reverse=True)
+    # Stable ordering prevents UI cards from jumping around between refreshes.
+    # Do not sort by transient status (online/offline), only by deterministic identity.
+    rows.sort(key=lambda x: ((x.get("label") or "").lower(), x["edge_id"].lower()))
     return rows
 
 
@@ -812,6 +978,10 @@ async def simulation_loop():
 @app.on_event("startup")
 async def startup_event():
     global mqtt_task
+    state.edges = load_edges_db()
+    if state.edges:
+        state.selected_edge_id = sorted(state.edges.keys(), key=lambda k: k.lower())[0]
+        sync_selected_edge_into_state()
     with suppress(Exception):
         await asyncio.to_thread(start_mdns_advertisement)
     asyncio.create_task(simulation_loop())
@@ -906,6 +1076,9 @@ async def get_status():
     selected_edge = get_selected_edge()
 
     uptime_sec = int(time.time())
+    now = time.time()
+    mobile_app_connected = (now - state.mobile_app_last_seen) <= state.mobile_app_timeout_seconds
+
     uptime_fmt = f"{(uptime_sec // 3600) % 100:02d}:{(uptime_sec % 3600) // 60:02d}:{uptime_sec % 60:02d}"
     hs_amps = ((1.2 if state.inducer_on else 0.0) + (3.5 if state.igniter_on else 0.0) + (0.5 if state.gas_valve_on else 0.0)) if state.heat_blower_on else 0.0
 
@@ -913,6 +1086,7 @@ async def get_status():
         "edge_required": 1 if EDGE_REQUIRED else 0,
         "edge_connected": 1 if edge_ready else 0,
         "selected_edge_id": state.selected_edge_id,
+        "mobile_app_connected": 1 if mobile_app_connected else 0,
         "selected_edge_label": selected_edge.get("label") if selected_edge else None,
         "trainer_type": state.trainer_type,
         "w_call": state.state_w or state.fault_active[52] or state.fault_active[53],
@@ -1202,26 +1376,50 @@ async def submit_diagnosis(
     diagnosis: Optional[str] = Query(default=None),
     edge_id: Optional[str] = Query(default=None),
 ):
-    maybe_select_edge(edge_id)
     if req is not None and diagnosis is None:
         diagnosis = req.diagnosis
     if diagnosis is None or len(diagnosis.strip()) == 0:
         raise HTTPException(status_code=400, detail="diagnosis is required")
 
-    state.latest_diagnosis = diagnosis
-    
+    # --- Mark that we've heard from a mobile app ---
+    state.mobile_app_last_seen = time.time()
+
+    # --- FIX: Operate on the specific edge that submitted the diagnosis ---
+    submitting_edge_id = (edge_id or "").strip()
+    if not submitting_edge_id or submitting_edge_id not in state.edges:
+        raise HTTPException(status_code=404, detail="Submitting edge not found")
+
+    # Temporarily load the submitting edge's runtime state
+    submitting_edge = state.edges[submitting_edge_id]
+    runtime = ensure_edge_runtime(submitting_edge)
+    apply_runtime_to_state(runtime)
+
+    # Now, grade against the correct state
     expected = get_expected_diagnosis()
+    state.latest_diagnosis = diagnosis # Update the temporary state
     
-    # Simple mockup diagnosis logic
     if diagnosis.upper() == expected.upper() or "CORRECT" in diagnosis.upper():
+        state.reset_all_faults_and_sims()
         state.work_history_log += f"[{time.strftime('%H:%M:%S')}] Submitted {diagnosis}: CORRECT\n"
-        persist_selected_runtime()
+        save_state_to_runtime(runtime)
+
+        if submitting_edge_id and mqtt_client:
+            try:
+                await mqtt_client.publish(f"trainer/{submitting_edge_id}/command", json.dumps({"action": "reset"}), qos=1)
+                print(f"Sent MQTT reset command to {submitting_edge_id} after correct diagnosis.")
+            except Exception as e:
+                print(f"Failed to send MQTT reset command to {submitting_edge_id}: {e}")
+        
+        if state.selected_edge_id != submitting_edge_id:
+            sync_selected_edge_into_state()
         return Response(content="CORRECT", media_type="text/plain")
     else:
         state.work_history_log += f"[{time.strftime('%H:%M:%S')}] Submitted {diagnosis}: INCORRECT\n"
-        state.student_score -= 5
+        state.student_score -= 10
         if state.student_score < 0: state.student_score = 0
-        persist_selected_runtime()
+        save_state_to_runtime(runtime)
+        if state.selected_edge_id != submitting_edge_id:
+            sync_selected_edge_into_state()
         return Response(content="INCORRECT", media_type="text/plain")
 
 
@@ -1269,15 +1467,59 @@ async def auth_check():
         return Response(content=state.authRole, media_type="text/plain")
     return Response(content="DENIED", media_type="text/plain", status_code=401)
 
+
+@app.post("/api/users/add")
+async def add_user(
+    user: str = Form(...),
+    passw: str = Form(..., alias="pass"),
+    role: str = Form(...),
+):
+    require_instructor_or_admin()
+
+    username = (user or "").strip()
+    password = (passw or "").strip()
+    normalized_role = (role or "").strip().lower()
+
+    if len(username) < 3 or len(username) > 64:
+        raise HTTPException(status_code=400, detail="Username must be 3-64 characters")
+    if len(password) < 3 or len(password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be 3-128 characters")
+    if normalized_role not in {"student", "instructor"}:
+        raise HTTPException(status_code=400, detail="Role must be student or instructor")
+    if any(existing.lower() == username.lower() for existing in users_db.keys()):
+        raise HTTPException(status_code=409, detail="User already exists")
+
+    users_db[username] = {
+        "pw_hash": hash_password(password),
+        "role": normalized_role,
+    }
+    save_users_db()
+
+    return {
+        "message": "OK",
+        "user": username,
+        "role": normalized_role,
+    }
+
 @app.get("/api/login")
 async def login(user: str, passw: Optional[str] = None, pass_alias: Optional[str] = Query(default=None, alias="pass")):
     password = passw if passw is not None else pass_alias
-    if user == "admin" and password == "admin":
-        state.authRole = "instructor"
-        return Response(content='{"status":"success","role":"instructor","token":"mocktoken123"}', media_type="application/json")
-    elif user == "student" and password == "student":
-        state.authRole = "student"
-        return Response(content='{"status":"success","role":"student","token":"mocktoken123"}', media_type="application/json")
+
+    username = (user or "").strip()
+    submitted = (password or "").strip()
+    record = users_db.get(username)
+
+    if record and verify_password(submitted, record):
+        if "pw_hash" not in record and "pw" in record:
+            record["pw_hash"] = hash_password(submitted)
+            record.pop("pw", None)
+            save_users_db()
+        role = str(record.get("role", "student"))
+        if role not in {"admin", "instructor", "student"}:
+            role = "student"
+        state.authRole = role
+        return Response(content=f'{{"status":"success","role":"{role}","token":"mocktoken123"}}', media_type="application/json")
+
     state.authRole = "none"
     return Response(content='{"status":"denied"}', media_type="application/json", status_code=401)
 
@@ -1292,6 +1534,25 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
     source_ip = req.get("source_ip") or (request.client.host if request.client else "unknown")
     edge_id = str(req.get("edge_id") or source_ip or "unknown").strip()
     trainer_type = normalize_trainer_type(req.get("trainer_type"))
+    mac_address = req.get("mac", "").lower()
+
+    # --- IDENTITY RESOLUTION ---
+    # If a device sends its MAC, it's asking for its proper identity. Find it by iterating.
+    if mac_address:
+        found_edge = None
+        for edge in state.edges.values():
+            if edge.get("mac") == mac_address:
+                found_edge = edge
+                break
+        
+        if found_edge:
+            registered_id = found_edge.get("edge_id")
+            registered_label = found_edge.get("label")
+            if registered_id and registered_label and edge_id != registered_id and mqtt_client:
+                command = {"action": "set_identity", "edge_id": registered_id, "label": registered_label}
+                await mqtt_client.publish(f"trainer/{edge_id}/command", json.dumps(command), qos=1)
+                print(f"Sent identity resolution to {edge_id} -> {registered_id}")
+
     label = str(req.get("device_name") or f"ESP32 {edge_id}").strip()
 
     prev = state.edges.get(edge_id, {})
@@ -1334,6 +1595,8 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
         "ram": req.get("ram") if req.get("ram") is not None else prev.get("ram", 245760),
         "uptime": req.get("uptime") if req.get("uptime") else prev.get("uptime", "00:00:00"),
         "temp": req.get("temp") if req.get("temp") is not None else prev.get("temp", 98.0),
+        "identity_reboot_required": req.get("identity_reboot_required", False),
+        "mac": mac_address or prev.get("mac", ""),
         "telemetry": telemetry,
         "runtime": runtime,
     }
@@ -1343,6 +1606,8 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
 
     if state.selected_edge_id == edge_id:
         sync_selected_edge_into_state()
+
+    save_edges_db()
 
     return {
         "message": "OK",
@@ -1364,6 +1629,10 @@ class SelectEdgeRequest(BaseModel):
     edge_id: str
 
 
+class RemoveEdgeRequest(BaseModel):
+    edge_id: str
+
+
 @app.post("/api/edges/select")
 async def select_edge(req: SelectEdgeRequest):
     edge_id = (req.edge_id or "").strip()
@@ -1378,6 +1647,59 @@ async def select_edge(req: SelectEdgeRequest):
         "message": "OK",
         "selected_edge_id": state.selected_edge_id,
     }
+
+
+@app.post("/api/edges/remove")
+async def remove_edge(req: RemoveEdgeRequest):
+    require_instructor_or_admin()
+    edge_id = (req.edge_id or "").strip()
+    if not edge_id or edge_id not in state.edges:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+    was_selected = state.selected_edge_id == edge_id
+    if was_selected:
+        persist_selected_runtime()
+
+    state.edges.pop(edge_id, None)
+
+    if was_selected:
+        state.selected_edge_id = None
+        if state.edges:
+            next_edge_id = sorted(state.edges.keys(), key=lambda k: k.lower())[0]
+            state.selected_edge_id = next_edge_id
+            sync_selected_edge_into_state()
+        else:
+            state.edge_connected = False
+
+    save_edges_db(force=True)
+
+    return {
+        "message": "OK",
+        "removed_edge_id": edge_id,
+        "selected_edge_id": state.selected_edge_id,
+        "edges": get_edges_payload(),
+    }
+
+@app.post("/api/edges/{edge_id}/command")
+async def send_edge_command(edge_id: str, command: Dict[str, Any]):
+    """Publish a command to a specific edge device via MQTT."""
+    require_instructor_or_admin()
+    if mqtt_client is None:
+        raise HTTPException(status_code=503, detail="MQTT service is not available")
+    if not edge_id or edge_id not in state.edges:
+        raise HTTPException(status_code=404, detail="Edge device not found")
+    
+    topic = f"trainer/{edge_id}/command"
+    payload = json.dumps(command)
+    
+    try:
+        await mqtt_client.publish(topic, payload, qos=1)
+        print(f"Sent command to {edge_id} on topic {topic}: {payload}")
+        return {"message": "Command sent successfully", "edge_id": edge_id, "command": command}
+    except MqttError as e:
+        print(f"Failed to publish MQTT message to {topic}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to publish MQTT message: {e}")
+
 
 @app.websocket("/ws")
 async def websocket_status(websocket: WebSocket):

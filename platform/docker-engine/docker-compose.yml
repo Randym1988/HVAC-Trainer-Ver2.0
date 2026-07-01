@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   engine:
     build: ./backend
@@ -8,6 +6,10 @@ services:
     environment:
       - EDGE_REQUIRED=true
       - MQTT_HOST=mqtt
+      - USERS_DB_FILE=/data/users.json
+      - EDGES_DB_FILE=/data/edges.json
+    volumes:
+      - ./backend/data:/data
     depends_on:
       - mqtt
     restart: unless-stopped

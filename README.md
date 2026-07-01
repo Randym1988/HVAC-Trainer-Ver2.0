@@ -24,11 +24,11 @@ HVAC Trainer Ver2.0/
 |  |  \- docker-compose.yml
 |- trainers/
 |  |- ac-gas-furnace/
-|  |  |- docs/
-|  |  \- firmware/              # PlatformIO project (ESP32-S3)
-|  \- heat-pump/
-|     |- docs/
-|     \- firmware/              # PlatformIO project (ESP32-S3)
+|  |  \- docs/
+|  |- heat-pump/
+|  |  \- docs/
+|  \- unified-master/
+|     \- firmware/              # Unified PlatformIO project (ESP32-S3)
 |- apps/
 |  \- vesta-core-app/
 |- docs/
@@ -70,21 +70,14 @@ curl http://localhost:8000/api/status
 
 ## Firmware Workflows
 
-### Furnace firmware
+The repository now uses a single unified firmware project for both hardware profiles.
 
 ```bash
-cd "trainers/ac-gas-furnace/firmware"
+cd "trainers/unified-master/firmware"
 pio run -e usb
-pio run -e usb -t upload
 ```
 
-### Heat-pump firmware
-
-```bash
-cd "trainers/heat-pump/firmware"
-pio run -e usb
-pio run -e usb -t upload
-```
+Use the guarded flash scripts in [tools](e:/Randy/HVAC%20Trainer%20Ver2.0/tools) for all uploads so the correct trainer number, hostname, and target profile are stamped into the firmware.
 
 ## Operational Notes
 
@@ -94,7 +87,7 @@ pio run -e usb -t upload
 
 ## Development Practices
 
-- Keep trainer-specific logic inside the corresponding trainer directory.
+- Keep shared runtime logic in the unified firmware and retain per-trainer docs for hardware-specific notes.
 - Update documentation when behavior, wiring assumptions, or API payloads change.
 - Validate firmware upload and API visibility together as part of every hardware-facing change.
 
