@@ -1,0 +1,68 @@
+HVAC TRAINER UNIFIED GPIO MASTER LAYOUT
+======================================
+
+Master Identity Strap
+---------------------
+GPIO 14 = Master System Identity Pin (INPUT_PULLUP ONLY)
+- LOW (pin hard-wired to GND)  => STRAIGHT_AC_FURNACE mode
+- HIGH (pin left open/floating) => HEAT_PUMP mode
+Safety: GPIO 14 is a logic input only. Never configure as OUTPUT and never drive HIGH.
+
+Universal Shared ESP32-S3 Channels
+----------------------------------
+GPIO 8  = I2C SDA (PCF8575 bus)
+GPIO 9  = I2C SCL (PCF8575 bus)
+GPIO 48 = Status NeoPixel
+
+Universal Thermostat Inputs
+---------------------------
+GPIO 7 = W call
+GPIO 6 = Y call
+GPIO 4 = G call
+
+Mode-Dependent ESP32 Inputs
+---------------------------
+GPIO 5  = O/B call input (active in HEAT_PUMP mode)
+GPIO 10 = Blower indicator monitor via optocoupler (used in STRAIGHT_AC_FURNACE telemetry)
+GPIO 11 = Gas valve monitor via optocoupler (used in STRAIGHT_AC_FURNACE telemetry)
+
+I2C Expander Layout (Shared Hardware Bus)
+-----------------------------------------
+Board 1 @ 0x20: Indoor fault relays/safety injection channels
+Board 2 @ 0x21: Main hardware relays (compressor, contactor, reversing valve, heat strips, furnace relays)
+Board 3 @ 0x22: Outdoor fault relays and pressure switch lines
+
+Heat Pump Focused Relay Map (Board 2)
+-------------------------------------
+P0  hs1_t1
+P1  hs1_t2
+P2  hs1_t3
+P3  hs2_t1
+P4  hs2_t2
+P5  hs2_t3
+P6  hs3_t1
+P7  hs3_t2
+P8  relay_compressor_motor
+P9  relay_compressor_contactor
+P10 relay_reversing_valve
+P11 relay_condenser_y
+P12 relay_y_wire_interlock
+P13 f30 shorted contactor
+P14 f31 compressor limit open
+
+Straight AC / Gas Furnace Focused Relay Map
+-------------------------------------------
+Board 2 P0  inducer relay
+Board 2 P1  igniter relay
+Board 2 P2  gas valve relay
+Board 2 P3  indoor heat blower relay
+Board 2 P8  compressor motor relay (AC path)
+Board 2 P9  compressor contactor relay (AC path)
+Board 2 P11 condenser Y path relay (AC path)
+Board 2 P12 Y interlock relay (AC path)
+
+Board 1 and Board 3 retain fault injection channels used by both training profiles.
+
+Software Routing Rule
+---------------------
+The unified ESP32-S3 master firmware always starts shared comms/services first (Wi-Fi, BLE, OTA, API, telemetry transport), then switches only the simulation/control engine by GPIO 14 identity.

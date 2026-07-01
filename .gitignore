@@ -20,6 +20,11 @@ __pycache__/
 .env
 .env.*
 
+# Local engine state and OTA artifacts
+platform/docker-engine/backend/data/
+tools/.ota-artifacts/
+tools/trainer-instance-registry.json
+
 # OS files
 .DS_Store
 Thumbs.db

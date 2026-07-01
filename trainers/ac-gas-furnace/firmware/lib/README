@@ -1,9 +1,0 @@
-Furnace firmware private library directory.
-
-Use this folder only for project-local reusable modules that should not live
-directly in `src/`.
-
-Current project status:
-- no custom private libraries are required right now
-- most logic is intentionally kept in `src/` (`CommManager`, `PhysicsEngine`,
-  `FurnaceController`) to simplify trainer debugging

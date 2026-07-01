@@ -903,8 +903,8 @@ checkAuthStatus();
                 </div>
 
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button class="btn" style="flex: 1; background: var(--accent-green); color: white; justify-content: center; border: none; padding: 16px; letter-spacing: 1px;" onclick="createUser('student')">ENCODE STUDENT</button>
-                    <button class="btn" style="flex: 1; background: var(--accent-blue); color: white; justify-content: center; border: none; padding: 16px; letter-spacing: 1px;" onclick="createUser('instructor')">ENCODE INSTRUCTOR</button>
+                    <button class="btn" style="flex: 1; background: var(--accent-green); color: white; justify-content: center; border: none; padding: 16px; letter-spacing: 1px;" onclick="createUser('student')">CREATE STUDENT</button>
+                    <button class="btn" style="flex: 1; background: var(--accent-blue); color: white; justify-content: center; border: none; padding: 16px; letter-spacing: 1px;" onclick="createUser('instructor')">CREATE INSTRUCTOR</button>
                 </div>
                 
                 <div id="user_success" style="color: var(--accent-green); text-align: center; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; display: none; padding: 10px; background: rgba(16, 185, 129, 0.1); border-radius: 8px; border: 1px solid rgba(16,185,129,0.3);">✅ Profile Encoded to Database</div>
@@ -1151,6 +1151,7 @@ checkAuthStatus();
             const cardBorder = isSelected ? 'var(--accent-cyan)' : '#1e293b';
             const dotColor = connected ? 'var(--accent-green)' : 'var(--accent-red)';
             const statusText = connected ? 'Online' : `Offline (${edge.age_seconds}s)`;
+            const rebootRequired = edge.identity_reboot_required === 1;
             return `
                 <div style="background:#050b14; border:1px solid ${cardBorder}; border-radius:10px; padding:14px; box-shadow: 0 4px 10px rgba(0,0,0,0.45);">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px;">
@@ -1163,7 +1164,12 @@ checkAuthStatus();
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:3px;">IP: ${edge.source_ip || '--'}</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Type: ${formatTrainerTypeLabel(edge.trainer_type)}</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">RSSI: ${edge.wifi_rssi ?? '--'} dBm | RAM: ${edge.ram ?? '--'}</div>
-                    <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; ${isSelected ? 'background:linear-gradient(180deg, #0ea5e9 0%, #0369a1 100%); color:white;' : ''}" onclick="selectEdge('${edge.edge_id}')">${isSelected ? 'Selected' : 'Select Trainer'}</button>
+                    ${rebootRequired ? `<div style="color:var(--accent-yellow); font-size:11px; font-weight:700; margin-bottom:10px; padding: 6px; background: rgba(234,179,8,0.1); border-radius: 6px; text-align:center;">REBOOT REQUIRED</div>` : ''}
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; ${isSelected ? 'background:linear-gradient(180deg, #0ea5e9 0%, #0369a1 100%); color:white;' : ''}" onclick="selectEdge('${edge.edge_id}')">${isSelected ? 'Selected' : 'Select Trainer'}</button>
+                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; border-color:#713f12; color:#fde68a;" onclick="rebootEdge('${edge.edge_id}')">Reboot</button>
+                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; border-color:#7f1d1d; color:#fecaca;" onclick="removeEdge('${edge.edge_id}')">Remove</button>
+                    </div>
                 </div>
             `;
         }).join('');
@@ -1213,6 +1219,57 @@ checkAuthStatus();
         } catch (e) {
             console.error('[selectEdge] Exception:', e);
             alert('Unable to select trainer: ' + e.message);
+        }
+    }
+
+    async function rebootEdge(edgeId) {
+        if (!confirm(`Are you sure you want to reboot trainer: ${edgeId}?`)) {
+            return;
+        }
+        try {
+            const res = await fetch(`/api/edges/${edgeId}/command`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'reboot' })
+            });
+            if (!res.ok) {
+                const errorText = await res.text();
+                throw new Error(`Server responded with ${res.status}: ${errorText}`);
+            }
+            alert('Reboot command sent to ' + edgeId);
+        } catch (e) {
+            console.error('[rebootEdge] Exception:', e);
+            alert('Error sending reboot command: ' + e.message);
+        }
+    }
+
+    async function removeEdge(edgeId) {
+        const confirmed = confirm(`Remove trainer ${edgeId} from this instructor list?`);
+        if (!confirmed) return;
+
+        try {
+            const res = await fetch('/api/edges/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ edge_id: edgeId })
+            });
+            if (!res.ok) {
+                console.error('[removeEdge] Server returned error:', res.status, res.statusText);
+                alert('Unable to remove trainer. It may have already disappeared.');
+                return;
+            }
+
+            const removeResponse = await res.json();
+            if (removeResponse && removeResponse.selected_edge_id) {
+                selectedEdgeId = removeResponse.selected_edge_id;
+            } else if (selectedEdgeId === edgeId) {
+                selectedEdgeId = null;
+            }
+
+            await refreshEdges();
+        } catch (e) {
+            console.error('[removeEdge] Exception:', e);
+            alert('Unable to remove trainer: ' + e.message);
         }
     }
 
@@ -1629,6 +1686,9 @@ checkAuthStatus();
             updateStatCard('ram', 'Available Memory', Math.round(data.ram / 1024) + ' KB', 'Free RAM', 'var(--accent-green)');
             updateStatCard('clients', 'Active Connections', data.clients, 'Devices Online', 'var(--accent-cyan)');
 
+            const mobileAppConnected = data.mobile_app_connected === 1;
+            updateGauge('mobile', 'Mobile App', mobileAppConnected ? 1 : 0, 0, 1, mobileAppConnected ? 'ONLINE' : 'OFFLINE', mobileAppConnected ? 'var(--accent-green)' : 'var(--text-muted)');
+
             if (data.inducer_on !== undefined) {
                 const toggleRelay = (id, isOn) => { 
                     const el = document.getElementById(id); 
@@ -1736,27 +1796,39 @@ checkAuthStatus();
     window.setInterval(refreshEdges, 2000);
 
     async function createUser(role) {
-        const user = document.getElementById('new_user').value.trim();
-        const pass = document.getElementById('new_pass').value.trim();
-        if(!user || !pass) return alert("Station ID and Security Key are required.");
-        const body = new URLSearchParams({ user, pass, role });
-        const res = await fetch('/api/users/add', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-            body
-        });
-        if(res.ok) {
-            document.getElementById('user_success').style.display = 'block';
-            document.getElementById('new_user').value = '';
-            document.getElementById('new_pass').value = '';
-            setTimeout(() => document.getElementById('user_success').style.display = 'none', 3000);
-        } else if (res.status === 401) {
-            alert("Access denied. Please log in as instructor/admin.");
-            checkAuthStatus();
-        } else {
-            const msg = await res.text().catch(() => "");
-            alert(msg ? `Database error: ${msg}` : "Error communicating with Vesta Core Database.");
+        try {
+            const user = document.getElementById('new_user').value.trim();
+            const pass = document.getElementById('new_pass').value.trim();
+            if(!user || !pass) return alert("Station ID and Security Key are required.");
+            const body = new URLSearchParams({ user, pass, role });
+            const res = await fetch('/api/users/add', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                body
+            });
+            if(res.ok) {
+                document.getElementById('user_success').style.display = 'block';
+                document.getElementById('new_user').value = '';
+                document.getElementById('new_pass').value = '';
+                setTimeout(() => document.getElementById('user_success').style.display = 'none', 3000);
+            } else if (res.status === 401) {
+                alert("Access denied. Please log in as instructor/admin.");
+                checkAuthStatus();
+            } else if (res.status === 409) {
+                alert("User already exists. Choose a different Station ID.");
+            } else {
+                let msg = "";
+                try {
+                    const payload = await res.json();
+                    msg = payload?.detail || "";
+                } catch {
+                    msg = await res.text().catch(() => "");
+                }
+                alert(msg ? `Database error: ${msg}` : "Error communicating with Vesta Core Database.");
+            }
+        } catch (e) {
+            alert(`Error communicating with Vesta Core Database: ${e?.message || 'Unknown error'}`);
         }
     }
 </script>
