@@ -733,9 +733,67 @@
     }
 
     const discoveredTrainerNames = {};
+    const trainerNameByMac = {
+        'C0:4E:30:34:4B:E4': 'Trainer 01',
+        '3C:84:27:F8:03:1C': 'Trainer 02'
+    };
+    const trainerNameByMacPrefix = {
+        'C0:4E': 'Trainer 01',
+        '3C:84': 'Trainer 02'
+    };
 
     function sanitizeBleTrainerName(name) {
-        return String(name || '').replace(/\u0000/g, '').trim();
+        const cleaned = String(name || '').replace(/\u0000/g, '').trim();
+        // Normalize common variants like "Trainer01" -> "Trainer 01" for consistency.
+        const compactMatch = cleaned.match(/^trainer\s*0*(\d{1,3})$/i);
+        if (compactMatch) {
+            return `Trainer ${compactMatch[1].padStart(2, '0')}`;
+        }
+        return cleaned;
+    }
+
+    function normalizeMacFromDeviceId(deviceId) {
+        const raw = String(deviceId || '').trim().toUpperCase();
+        if (!raw) return '';
+        const compact = raw.replace(/[^0-9A-F]/g, '');
+        if (compact.length < 12) return raw;
+        const mac = compact.substring(0, 12).match(/.{1,2}/g).join(':');
+        return mac;
+    }
+
+    function resolveTrainerNameFromDeviceId(deviceId) {
+        const normalizedMac = normalizeMacFromDeviceId(deviceId);
+        if (trainerNameByMac[normalizedMac]) {
+            return trainerNameByMac[normalizedMac];
+        }
+
+        const upperRaw = String(deviceId || '').trim().toUpperCase();
+        for (const prefix of Object.keys(trainerNameByMacPrefix)) {
+            if (upperRaw.startsWith(prefix)) {
+                return trainerNameByMacPrefix[prefix];
+            }
+            if (normalizedMac.startsWith(prefix)) {
+                return trainerNameByMacPrefix[prefix];
+            }
+        }
+
+        return '';
+    }
+
+    function resolveScanDisplayName(result) {
+        // Android may return stale bonded aliases in device.name; prefer live advertisement localName.
+        const advertisedName = sanitizeBleTrainerName(result.localName);
+        if (advertisedName) {
+            return advertisedName;
+        }
+
+        // Some Android scans omit localName; map known trainer IDs/MAC prefixes deterministically.
+        const mappedTrainerName = resolveTrainerNameFromDeviceId(result.device.deviceId);
+        if (mappedTrainerName) {
+            return mappedTrainerName;
+        }
+
+        return `Trainer (${result.device.deviceId.substring(0, 6)})`;
     }
 
     async function scanForTrainers() {
@@ -755,7 +813,6 @@
 
             const discovered = [];
             await BleClient.requestLEScan({}, (result) => {
-                const advertisedName = sanitizeBleTrainerName(result.localName || result.device.name);
                 const hasVestaService = result.uuids && result.uuids.some(uuid => {
                     const lUuid = uuid.toLowerCase();
                     return lUuid === "6e400001-b5a3-f393-e0a9-e50e24dcca9e" || lUuid === "12a59900-173d-465c-914a-7a49c32c4438";
@@ -764,12 +821,7 @@
                 // Rely on the service UUID for discovery, which is more robust than a hardcoded name.
                 if (hasVestaService) {
                     if (!discovered.find(d => d.deviceId === result.device.deviceId)) {
-                        if (!advertisedName) {
-                            // If the device has no name, use a placeholder. The firmware should always provide a name.
-                            result.device.name = `Trainer (${result.device.deviceId.substring(0, 6)})`;
-                        } else {
-                            result.device.name = advertisedName;
-                        }
+                        result.device.name = resolveScanDisplayName(result);
                         discoveredTrainerNames[result.device.deviceId] = result.device.name;
                         discovered.push(result.device);
                         renderTrainerList(discovered);
