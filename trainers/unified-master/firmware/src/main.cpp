@@ -302,7 +302,7 @@ void applyTrainerIdentityMetadata() {
   // Simplified, consistent naming scheme based on the embedded trainer number.
   // This is used for BLE name, mDNS hostname, and backend identification.
   EDGE_ID = "trainer" + instance;
-  EDGE_LABEL = "Trainer" + instance;
+  EDGE_LABEL = "Trainer " + instance;
   OTA_HOSTNAME = "trainer" + instance;
 
   // Set the trainer type for control logic, but it no longer affects the name.

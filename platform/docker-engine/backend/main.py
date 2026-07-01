@@ -7,6 +7,7 @@ import json
 import hmac
 import hashlib
 import secrets
+import re
 from contextlib import suppress
 from fastapi import FastAPI, Request, HTTPException, Response, Depends, WebSocket, WebSocketDisconnect, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -114,6 +115,21 @@ def require_instructor_or_admin() -> None:
         raise HTTPException(status_code=401, detail="DENIED")
 
 
+def format_trainer_label_from_edge_id(edge_id: str) -> str:
+    normalized = (edge_id or "").strip().lower()
+    match = re.fullmatch(r"trainer0*([0-9]+)", normalized)
+    if match:
+        return f"Trainer {int(match.group(1)):02d}"
+    return (edge_id or "").strip() or "Trainer"
+
+
+def sanitize_device_label(raw_label: Optional[str], edge_id: str) -> str:
+    cleaned = str(raw_label or "").replace("\x00", "").strip()
+    if cleaned:
+        return cleaned
+    return format_trainer_label_from_edge_id(edge_id)
+
+
 def load_edges_db() -> Dict[str, Dict[str, Any]]:
     try:
         if not os.path.exists(EDGES_DB_FILE):
@@ -134,7 +150,7 @@ def load_edges_db() -> Dict[str, Dict[str, Any]]:
             trainer_type = "heat_pump" if incoming_type in {"heat_pump", "heatpump", "hp"} else "ac_gas"
             restored[safe_id] = {
                 "edge_id": safe_id,
-                "label": str(edge.get("label") or safe_id),
+                "label": sanitize_device_label(edge.get("label"), safe_id),
                 "source_ip": str(edge.get("source_ip") or ""),
                 "last_seen": float(edge.get("last_seen") or 0.0),
                 "trainer_type": trainer_type,
@@ -169,7 +185,7 @@ def save_edges_db(force: bool = False) -> None:
             continue
         serializable[edge_id] = {
             "edge_id": edge_id,
-            "label": edge.get("label", edge_id),
+            "label": sanitize_device_label(edge.get("label"), edge_id),
             "source_ip": edge.get("source_ip", ""),
             "last_seen": edge.get("last_seen", 0.0),
             "trainer_type": edge.get("trainer_type", "ac_gas"),
@@ -438,7 +454,7 @@ def get_edges_payload() -> List[Dict[str, Any]]:
         rows.append(
             {
                 "edge_id": edge_id,
-                "label": edge.get("label", edge_id),
+                "label": sanitize_device_label(edge.get("label"), edge_id),
                 "source_ip": edge.get("source_ip", ""),
                 "trainer_type": edge.get("trainer_type", "ac_gas"),
                 "connected": 1 if connected else 0,
@@ -1553,7 +1569,7 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
                 await mqtt_client.publish(f"trainer/{edge_id}/command", json.dumps(command), qos=1)
                 print(f"Sent identity resolution to {edge_id} -> {registered_id}")
 
-    label = str(req.get("device_name") or f"ESP32 {edge_id}").strip()
+    label = sanitize_device_label(req.get("device_name"), edge_id)
 
     prev = state.edges.get(edge_id, {})
     runtime = ensure_edge_runtime(prev) if isinstance(prev, dict) and prev else default_runtime()

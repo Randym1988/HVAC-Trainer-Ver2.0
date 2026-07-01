@@ -10,6 +10,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+  $PSNativeCommandUseErrorActionPreference = $false
+}
 
 $workspaceRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $firmwareDir = Join-Path $workspaceRoot "trainers\unified-master\firmware"
@@ -35,22 +38,80 @@ function Invoke-CheckedCommand {
   }
 }
 
+function Resolve-LocalBindIp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Endpoint
+  )
+
+  try {
+    $targetBytes = [System.Net.IPAddress]::Parse($Endpoint).GetAddressBytes()
+  }
+  catch {
+    return ""
+  }
+
+  $candidates = Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp,Manual -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.IPAddress -and
+      $_.IPAddress -notlike '169.254*' -and
+      $_.IPAddress -ne '127.0.0.1'
+    }
+
+  foreach ($candidate in $candidates) {
+    try {
+      $candidateBytes = [System.Net.IPAddress]::Parse($candidate.IPAddress).GetAddressBytes()
+      if ($candidateBytes[0] -eq $targetBytes[0] -and $candidateBytes[1] -eq $targetBytes[1] -and $candidateBytes[2] -eq $targetBytes[2]) {
+        return $candidate.IPAddress
+      }
+    }
+    catch {
+      continue
+    }
+  }
+
+  return ""
+}
+
+function Test-HttpReachability {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Endpoint,
+    [string]$BindIp
+  )
+
+  $args = @("--silent", "--show-error", "--max-time", "3")
+  if (-not [string]::IsNullOrWhiteSpace($BindIp)) {
+    $args += @("--interface", $BindIp)
+  }
+  $args += "http://$Endpoint/api/status"
+
+  & curl.exe @args *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
 function Invoke-EspotaUpload {
   param(
     [Parameter(Mandatory = $true)]
     [string]$Endpoint,
     [Parameter(Mandatory = $true)]
-    [string]$BinPath
+    [string]$BinPath,
+    [string]$BindIp
   )
 
+  $hostArgs = @()
+  if (-not [string]::IsNullOrWhiteSpace($BindIp)) {
+    $hostArgs = @("-I", $BindIp)
+  }
+
   Write-Host "Attempt 1: OTA with password"
-  & pio pkg exec -p tool-espotapy -- espota.py -i $Endpoint -p 3232 -a "Mitchell2019!" -f $BinPath -r
+  & pio pkg exec -p tool-espotapy -- espota.py -i $Endpoint @hostArgs -p 3232 -a "Mitchell2019!" -f $BinPath -r
   if ($LASTEXITCODE -eq 0) {
     return
   }
 
   Write-Host "Attempt 2: OTA without password fallback"
-  & pio pkg exec -p tool-espotapy -- espota.py -i $Endpoint -p 3232 -f $BinPath -r
+  & pio pkg exec -p tool-espotapy -- espota.py -i $Endpoint @hostArgs -p 3232 -f $BinPath -r
   if ($LASTEXITCODE -ne 0) {
     throw "OTA upload failed after password and no-password attempts."
   }
@@ -61,13 +122,23 @@ function Invoke-HttpOtaUpload {
     [Parameter(Mandatory = $true)]
     [string]$Endpoint,
     [Parameter(Mandatory = $true)]
-    [string]$BinPath
+    [string]$BinPath,
+    [string]$BindIp
   )
 
   Write-Host "Attempt 3: HTTP OTA fallback via /update"
-  $httpBody = & curl.exe --silent --show-error -F "update=@$BinPath;type=application/octet-stream" "http://$Endpoint/update" 2>&1
+  $curlArgs = @("--silent", "--show-error")
+  if (-not [string]::IsNullOrWhiteSpace($BindIp)) {
+    $curlArgs += @("--interface", $BindIp)
+  }
+  $curlArgs += @("-F", "update=@$BinPath;type=application/octet-stream", "http://$Endpoint/update")
+  $oldEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $httpBody = & curl.exe @curlArgs 2>&1
+  $ErrorActionPreference = $oldEap
   $curlExit = $LASTEXITCODE
-  $bodyTrim = ([string]$httpBody).Trim()
+  $httpText = ($httpBody | ForEach-Object { [string]$_ }) -join "`n"
+  $bodyTrim = $httpText.Trim()
 
   if ($curlExit -eq 0 -and $bodyTrim -eq "OK") {
     return
@@ -75,14 +146,10 @@ function Invoke-HttpOtaUpload {
 
   if ($curlExit -eq 56 -or $bodyTrim -eq "FAIL") {
     Write-Host "HTTP OTA returned reset/FAIL; verifying board restart..."
-    Start-Sleep -Seconds 3
     for ($i = 0; $i -lt 10; $i++) {
-      try {
-        $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "http://$Endpoint/api/status"
+      if (Test-HttpReachability -Endpoint $Endpoint -BindIp $BindIp) {
         Write-Host "Board responded after HTTP OTA fallback."
         return
-      } catch {
-        Start-Sleep -Seconds 1
       }
     }
   }
@@ -244,10 +311,14 @@ Write-Host "OTA host        : $resolvedHost"
 Write-Host "Board MAC       : $($resolved["mac"])"
 
 $uploadEndpoint = Resolve-OtaEndpoint -HostName $resolvedHost
+$bindIp = Resolve-LocalBindIp -Endpoint $uploadEndpoint
 if ($uploadEndpoint -ne $resolvedHost) {
   Write-Host "OTA endpoint    : $uploadEndpoint (resolved from hostname)"
 } else {
   Write-Host "OTA endpoint    : $uploadEndpoint"
+}
+if (-not [string]::IsNullOrWhiteSpace($bindIp)) {
+  Write-Host "Bind source IP  : $bindIp"
 }
 
 Push-Location $firmwareDir
@@ -266,10 +337,10 @@ try {
   }
 
   try {
-    Invoke-EspotaUpload -Endpoint $uploadEndpoint -BinPath $firmwareBinPath
+    Invoke-EspotaUpload -Endpoint $uploadEndpoint -BinPath $firmwareBinPath -BindIp $bindIp
   } catch {
     Write-Host "ESP OTA handshake failed, attempting HTTP OTA fallback..."
-    Invoke-HttpOtaUpload -Endpoint $uploadEndpoint -BinPath $firmwareBinPath
+    Invoke-HttpOtaUpload -Endpoint $uploadEndpoint -BinPath $firmwareBinPath -BindIp $bindIp
   }
   Write-Host "OTA update complete for Trainer $resolvedTrainerNumber on $resolvedHost ($uploadEndpoint)."
 }

@@ -48,6 +48,41 @@ function Invoke-CheckedCommand {
   }
 }
 
+function Resolve-LocalBindIp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Endpoint
+  )
+
+  try {
+    $targetBytes = [System.Net.IPAddress]::Parse($Endpoint).GetAddressBytes()
+  }
+  catch {
+    return ""
+  }
+
+  $candidates = Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp,Manual -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.IPAddress -and
+      $_.IPAddress -notlike '169.254*' -and
+      $_.IPAddress -ne '127.0.0.1'
+    }
+
+  foreach ($candidate in $candidates) {
+    try {
+      $candidateBytes = [System.Net.IPAddress]::Parse($candidate.IPAddress).GetAddressBytes()
+      if ($candidateBytes[0] -eq $targetBytes[0] -and $candidateBytes[1] -eq $targetBytes[1] -and $candidateBytes[2] -eq $targetBytes[2]) {
+        return $candidate.IPAddress
+      }
+    }
+    catch {
+      continue
+    }
+  }
+
+  return ""
+}
+
 function Resolve-OtaEndpoint {
   param(
     [Parameter(Mandatory = $true)]
@@ -79,6 +114,32 @@ function Resolve-OtaEndpoint {
   }
 
   return $HostName
+}
+
+function Resolve-OtaEndpointByMac {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$MacAddress
+  )
+
+  $normalized = ($MacAddress -replace '-', ':').ToLowerInvariant()
+  try {
+    $neighbor = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.IPAddress -and
+        $_.LinkLayerAddress -and
+        (($_.LinkLayerAddress -replace '-', ':').ToLowerInvariant() -eq $normalized)
+      } |
+      Select-Object -First 1
+    if ($null -ne $neighbor) {
+      return [string]$neighbor.IPAddress
+    }
+  }
+  catch {
+    # Keep default unresolved endpoint.
+  }
+
+  return ""
 }
 
 function Write-TrainerInstanceHeader {
@@ -131,6 +192,12 @@ function Get-RegistryBoards {
       $otaHost = "trainer{0}.local" -f $trainerNumber.ToString("00")
     }
     $otaEndpoint = Resolve-OtaEndpoint -HostName $otaHost
+    if ($otaEndpoint -eq $otaHost) {
+      $endpointByMac = Resolve-OtaEndpointByMac -MacAddress $mac
+      if (-not [string]::IsNullOrWhiteSpace($endpointByMac)) {
+        $otaEndpoint = $endpointByMac
+      }
+    }
 
     $entries += [pscustomobject]@{
       Mac = $mac
@@ -138,6 +205,7 @@ function Get-RegistryBoards {
       TrainerNumber = $trainerNumber
       OtaHost = $otaHost
       OtaEndpoint = $otaEndpoint
+      LocalBindIp = (Resolve-LocalBindIp -Endpoint $otaEndpoint)
     }
   }
 
@@ -210,19 +278,38 @@ function Start-OtaUploadJob {
   $trainer = [int]$Board.TrainerNumber
   $artifactPath = Join-Path $artifactDir ("trainer{0}.bin" -f $trainer.ToString("00"))
 
-  return Start-Job -ArgumentList @($firmwareDir, $trainer, [string]$Board.OtaHost, [string]$Board.OtaEndpoint, $artifactPath) -ScriptBlock {
-    param($jobFirmwareDir, $jobTrainerNumber, $jobHost, $jobEndpoint, $jobBin)
+  return Start-Job -ArgumentList @($firmwareDir, $trainer, [string]$Board.OtaHost, [string]$Board.OtaEndpoint, $artifactPath, [string]$Board.LocalBindIp) -ScriptBlock {
+    param($jobFirmwareDir, $jobTrainerNumber, $jobHost, $jobEndpoint, $jobBin, $jobBindIp)
 
     $ErrorActionPreference = "Continue"
     Set-Location $jobFirmwareDir
 
+    function Test-HttpReachability {
+      param($Endpoint, $BindIp)
+      $args = @("--silent", "--show-error", "--max-time", "3")
+      if (-not [string]::IsNullOrWhiteSpace($BindIp)) {
+        $args += @("--interface", $BindIp)
+      }
+      $args += "http://$Endpoint/api/status"
+      & curl.exe @args *> $null
+      return ($LASTEXITCODE -eq 0)
+    }
+
     $outputLines = New-Object System.Collections.Generic.List[string]
     $outputLines.Add(("Starting OTA upload for Trainer #{0} to {1} (endpoint: {2})" -f $jobTrainerNumber, $jobHost, $jobEndpoint))
+    if (-not [string]::IsNullOrWhiteSpace($jobBindIp)) {
+      $outputLines.Add(("Using local bind IP: {0}" -f $jobBindIp))
+    }
 
     $exitCode = 1
 
+    $hostArgs = @()
+    if (-not [string]::IsNullOrWhiteSpace($jobBindIp)) {
+      $hostArgs = @("-I", $jobBindIp)
+    }
+
     $outputLines.Add("Attempt 1: OTA with password")
-    & pio pkg exec -p tool-espotapy -- espota.py -i $jobEndpoint -p 3232 -a "Mitchell2019!" -f $jobBin -r 2>&1 |
+    & pio pkg exec -p tool-espotapy -- espota.py -i $jobEndpoint @hostArgs -p 3232 -a "Mitchell2019!" -f $jobBin -r 2>&1 |
       ForEach-Object {
         $line = [string]$_
         $outputLines.Add($line)
@@ -231,7 +318,7 @@ function Start-OtaUploadJob {
 
     if ($exitCode -ne 0) {
       $outputLines.Add("Attempt 2: OTA without password fallback")
-      & pio pkg exec -p tool-espotapy -- espota.py -i $jobEndpoint -p 3232 -f $jobBin -r 2>&1 |
+      & pio pkg exec -p tool-espotapy -- espota.py -i $jobEndpoint @hostArgs -p 3232 -f $jobBin -r 2>&1 |
         ForEach-Object {
           $line = [string]$_
           $outputLines.Add($line)
@@ -241,7 +328,12 @@ function Start-OtaUploadJob {
 
     if ($exitCode -ne 0) {
       $outputLines.Add("Attempt 3: HTTP OTA fallback via /update")
-      $httpBody = & curl.exe --silent --show-error -F "update=@$jobBin;type=application/octet-stream" "http://$jobEndpoint/update" 2>&1
+      $curlArgs = @("--silent", "--show-error")
+      if (-not [string]::IsNullOrWhiteSpace($jobBindIp)) {
+        $curlArgs += @("--interface", $jobBindIp)
+      }
+      $curlArgs += @("-F", "update=@$jobBin;type=application/octet-stream", "http://$jobEndpoint/update")
+      $httpBody = & curl.exe @curlArgs 2>&1
       $curlExit = $LASTEXITCODE
       foreach ($line in ($httpBody -split "`r?`n")) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -255,15 +347,11 @@ function Start-OtaUploadJob {
         # curl 56 often means the board rebooted and reset the socket after a successful write.
         if ($curlExit -eq 56 -or $bodyTrim -eq "FAIL") {
           $outputLines.Add("HTTP OTA returned reset/FAIL; verifying board comes back online...")
-          Start-Sleep -Seconds 3
           $online = $false
           for ($i = 0; $i -lt 10; $i++) {
-            try {
-              $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "http://$jobEndpoint/api/status"
+            if (Test-HttpReachability -Endpoint $jobEndpoint -BindIp $jobBindIp) {
               $online = $true
               break
-            } catch {
-              Start-Sleep -Seconds 1
             }
           }
           if ($online) {

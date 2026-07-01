@@ -1,6 +1,6 @@
 # HVAC Next Gen Monorepo
 
-![CI](https://img.shields.io/github/actions/workflow/status/Randym1988/HVAC-Trainer-Ver2.0/ci.yml?branch=main&label=CI)
+![CI](https://img.shields.io/badge/CI-not_configured-lightgrey)
 ![Repository](https://img.shields.io/badge/monorepo-turborepo-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
 ![License](https://img.shields.io/badge/license-add%20license-lightgrey)

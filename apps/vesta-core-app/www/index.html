@@ -732,6 +732,12 @@
         document.getElementById('login-overlay').style.display='none';
     }
 
+    const discoveredTrainerNames = {};
+
+    function sanitizeBleTrainerName(name) {
+        return String(name || '').replace(/\u0000/g, '').trim();
+    }
+
     async function scanForTrainers() {
         try {
             if (!window.Capacitor) {
@@ -749,7 +755,7 @@
 
             const discovered = [];
             await BleClient.requestLEScan({}, (result) => {
-                const name = result.device.name || result.localName;
+                const advertisedName = sanitizeBleTrainerName(result.localName || result.device.name);
                 const hasVestaService = result.uuids && result.uuids.some(uuid => {
                     const lUuid = uuid.toLowerCase();
                     return lUuid === "6e400001-b5a3-f393-e0a9-e50e24dcca9e" || lUuid === "12a59900-173d-465c-914a-7a49c32c4438";
@@ -758,10 +764,13 @@
                 // Rely on the service UUID for discovery, which is more robust than a hardcoded name.
                 if (hasVestaService) {
                     if (!discovered.find(d => d.deviceId === result.device.deviceId)) {
-                        if (!result.device.name) {
+                        if (!advertisedName) {
                             // If the device has no name, use a placeholder. The firmware should always provide a name.
-                            result.device.name = name || `Trainer (${result.device.deviceId.substring(0, 6)})`;
+                            result.device.name = `Trainer (${result.device.deviceId.substring(0, 6)})`;
+                        } else {
+                            result.device.name = advertisedName;
                         }
+                        discoveredTrainerNames[result.device.deviceId] = result.device.name;
                         discovered.push(result.device);
                         renderTrainerList(discovered);
                     }
@@ -832,6 +841,7 @@
 
     async function connectToTrainer(deviceId) {
         try {
+            const trainerName = discoveredTrainerNames[deviceId] || `Trainer (${deviceId.substring(0, 6)})`;
             const BleClient = (window.capacitorCommunityBluetoothLe && window.capacitorCommunityBluetoothLe.BleClient) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BleClient);
             if (!BleClient) {
                 alert("BleClient is not available.");
@@ -839,7 +849,7 @@
             }
 
             const list = document.getElementById('trainer-list');
-            list.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${deviceId}...</div>`;
+            list.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${trainerName}...</div>`;
 
             await BleClient.connect(deviceId, (disconnectedId) => {
                 alert("Trainer Disconnected: " + disconnectedId);
@@ -913,7 +923,7 @@
 
             list.innerHTML = `
                 <div style="text-align: center; color: var(--accent-green); padding: 10px; border: 1px solid var(--accent-green); border-radius: 8px; margin-bottom: 10px;">
-                    <div style="font-weight: bold;">🟢 Connected to Trainer</div>
+                    <div style="font-weight: bold;">🟢 Connected to ${trainerName}</div>
                     <div style="font-size: 11px; opacity: 0.7; margin-bottom: 8px;">Device ID: ${deviceId}</div>
                     <button class="connect-btn" style="background: var(--accent-red); margin-top: 5px; width: 100%; border-radius: 6px; padding: 8px; color: white; border: none; font-weight: bold;" onclick="disconnectTrainer('${deviceId}')">Disconnect</button>
                 </div>
