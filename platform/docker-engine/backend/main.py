@@ -34,7 +34,8 @@ mqtt_task: Optional[asyncio.Task] = None
 MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
 EDGE_REQUIRED = os.getenv("EDGE_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
 SIMULATION_TICK_SECONDS = 0.20
-WS_BROADCAST_INTERVAL_SECONDS = 0.25
+WS_BROADCAST_INTERVAL_SECONDS = 0.15
+EDGE_TIMEOUT_SECONDS = float(os.getenv("EDGE_TIMEOUT_SECONDS", "3.0"))
 MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
 mdns = None
 mdns_service_info = None
@@ -260,7 +261,7 @@ class AppState:
     def __init__(self):
         self.edge_connected = False
         self.edge_last_seen = 0.0
-        self.edge_timeout_seconds = 8.0
+        self.edge_timeout_seconds = EDGE_TIMEOUT_SECONDS
         self.ws_last_broadcast = 0.0
         self.trainer_type = "ac_gas"
         self.selected_edge_id: Optional[str] = None
@@ -1586,6 +1587,22 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
     label = sanitize_device_label(req.get("device_name"), edge_id)
 
     prev = state.edges.get(edge_id, {})
+    if (not prev) and mac_address:
+        matched_id = None
+        matched_edge = None
+        for existing_id, existing_edge in state.edges.items():
+            if existing_edge.get("mac") == mac_address:
+                matched_id = existing_id
+                matched_edge = existing_edge
+                break
+
+        if matched_edge is not None:
+            prev = matched_edge
+            if matched_id and matched_id != edge_id:
+                state.edges.pop(matched_id, None)
+                if state.selected_edge_id == matched_id:
+                    state.selected_edge_id = edge_id
+
     runtime = ensure_edge_runtime(prev) if isinstance(prev, dict) and prev else default_runtime()
 
     if req.get("w") is not None:

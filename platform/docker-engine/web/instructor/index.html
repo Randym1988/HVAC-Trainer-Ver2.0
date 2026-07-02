@@ -1556,6 +1556,8 @@ checkAuthStatus();
         `;
     }
 
+    const EDGE_POLL_INTERVAL_MS = 750;
+    const WS_RECONNECT_MS = 1000;
     let gateway = `ws://${window.location.host}/ws`;
     let websocket;
     const statusDot = document.getElementById('ws-status');
@@ -1563,7 +1565,11 @@ checkAuthStatus();
     function initWebSocket() {
         websocket = new WebSocket(gateway);
         websocket.onopen = () => statusDot.classList.add('connected');
-        websocket.onclose = () => { statusDot.classList.remove('connected'); setTimeout(initWebSocket, 2000); };
+        websocket.onclose = () => {
+            statusDot.classList.remove('connected');
+            refreshEdges();
+            setTimeout(initWebSocket, WS_RECONNECT_MS);
+        };
         websocket.onmessage = onMessage;
     }
 
@@ -1805,7 +1811,7 @@ checkAuthStatus();
     });
     window.addEventListener('load', () => applyTrainerTypeUI(currentTrainerType));
     window.addEventListener('load', refreshEdges);
-    window.setInterval(refreshEdges, 2000);
+    window.setInterval(refreshEdges, EDGE_POLL_INTERVAL_MS);
 
     async function createUser(role) {
         try {
