@@ -221,10 +221,47 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_
 
     sim_id_supply_temp = add_noise(set_id_temp, 0.2f); // Revert to simple ambient tracking
 
+	// Refrigerant-specific pressure switch model with hysteresis.
+	float lps_trip = 40.0f;
+	float lps_reset = 80.0f;
+	float hps_trip = 610.0f;
+	float hps_reset = 475.0f;
+
+	if (current_refrigerant == "R454B") {
+		lps_trip = 35.0f; lps_reset = 70.0f; hps_trip = 575.0f; hps_reset = 450.0f;
+	} else if (current_refrigerant == "R32") {
+		lps_trip = 45.0f; lps_reset = 85.0f; hps_trip = 640.0f; hps_reset = 500.0f;
+	} else if (current_refrigerant == "R22") {
+		lps_trip = 25.0f; lps_reset = 60.0f; hps_trip = 400.0f; hps_reset = 300.0f;
+	} else if (current_refrigerant == "R407C") {
+		lps_trip = 25.0f; lps_reset = 55.0f; hps_trip = 420.0f; hps_reset = 320.0f;
+	} else if (current_refrigerant == "R134a") {
+		lps_trip = 10.0f; lps_reset = 25.0f; hps_trip = 300.0f; hps_reset = 200.0f;
+	} else if (current_refrigerant == "R404A") {
+		lps_trip = 15.0f; lps_reset = 35.0f; hps_trip = 450.0f; hps_reset = 350.0f;
+	}
+
+	if (sim_od_low_press <= lps_trip) {
+		phys_lps_tripped = true;
+	} else if (sim_od_low_press >= lps_reset) {
+		phys_lps_tripped = false;
+	}
+
+	if (sim_od_high_press >= hps_trip) {
+		phys_hps_tripped = true;
+	} else if (sim_od_high_press <= hps_reset) {
+		phys_hps_tripped = false;
+	}
+
+	// Fault-injected switch opens still force a tripped state.
 	bool lps_board_open = has_faults && (faults[7] || faults[26]);
 	bool hps_board_open = has_faults && (faults[8] || faults[27]);
-	phys_lps_tripped = lps_board_open || sim_od_low_press < 45.0f;
-	phys_hps_tripped = hps_board_open || sim_od_high_press > 430.0f;
+	if (lps_board_open) {
+		phys_lps_tripped = true;
+	}
+	if (hps_board_open) {
+		phys_hps_tripped = true;
+	}
 
 	telemetry_timer = millis();
 }

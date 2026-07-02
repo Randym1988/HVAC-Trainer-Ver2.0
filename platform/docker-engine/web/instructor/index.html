@@ -538,6 +538,10 @@ checkAuthStatus();
                                 <option value="R404A">Ref: R-404A</option>
                                 <option value="R407C">Ref: R-407C</option>
                             </select>
+                            <select id="od_metering_type" class="ref-selector" style="display:none;" onchange="setMetering('od', this.value)">
+                                <option value="1">OD Meter: TXV</option>
+                                <option value="0">OD Meter: Piston</option>
+                            </select>
                         </div>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 16px;"> 
@@ -965,6 +969,11 @@ checkAuthStatus();
         const thermostatO = document.getElementById('thermostat_o');
         if (thermostatO) {
             thermostatO.style.display = isHeatPump ? 'flex' : 'none';
+        }
+
+        const odMeteringDropdown = document.getElementById('od_metering_type');
+        if (odMeteringDropdown) {
+            odMeteringDropdown.style.display = isHeatPump ? '' : 'none';
         }
 
         // Buttons only shown on HEAT PUMP

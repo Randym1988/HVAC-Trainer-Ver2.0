@@ -308,6 +308,7 @@ class AppState:
         # Refrigerant
         self.current_refrigerant = "R410A"
         self.id_is_txv = True
+        self.od_is_txv = True
         
         # Ambient / Environment defaults
         self.set_od_temp = 90.0
@@ -652,7 +653,7 @@ async def simulation_loop():
         if not is_compressor:
             target_low = target_eq_press
             target_high = target_eq_press
-            bleed_rate = 0.005 if state.id_is_txv else 0.025
+            bleed_rate = 0.005 if (state.id_is_txv and state.od_is_txv) else 0.025
             
             state.sim_od_high_press += (target_eq_press - state.sim_od_high_press) * bleed_rate
             state.sim_od_low_press += (target_eq_press - state.sim_od_low_press) * bleed_rate
@@ -738,7 +739,7 @@ async def simulation_loop():
                 excess = state.set_od_temp - 65.0
                 extreme_ambient_penalty = (excess * excess * 1.2)
             target_high = (base_head + extreme_ambient_penalty) * ref_mult
-            target_sh = 10.0 if state.id_is_txv else 15.0
+            target_sh = 10.0 if state.od_is_txv else 15.0
 
             line_friction_delta = 7.0 if id_fan_fail else 24.0
 
@@ -1118,7 +1119,9 @@ async def get_status():
         
         "refrigerant": state.current_refrigerant,
         "id_is_txv": 1 if state.id_is_txv else 0,
+        "od_is_txv": 1 if state.od_is_txv else 0,
         "indoor_metering": "TXV" if state.id_is_txv else "Piston",
+        "outdoor_metering": "TXV" if state.od_is_txv else "Piston",
         
         "set_od": round(state.set_od_temp, 1),
         "set_id": round(state.set_id_temp, 1),
@@ -1459,20 +1462,31 @@ async def update_refrigerant(
 
 
 class MeteringUpdate(BaseModel):
-    id_txv: int
+    id_txv: Optional[int] = None
+    od_txv: Optional[int] = None
 
 @app.post("/api/metering")
 async def update_metering(
     req: Optional[MeteringUpdate] = None,
     id_txv: Optional[int] = Query(default=None),
+    od_txv: Optional[int] = Query(default=None),
     edge_id: Optional[str] = Query(default=None),
 ):
     maybe_select_edge(edge_id)
-    if req is not None and id_txv is None:
-        id_txv = req.id_txv
-    if id_txv is None:
-        raise HTTPException(status_code=400, detail="id_txv is required")
-    state.id_is_txv = (id_txv == 1)
+    if req is not None:
+        if id_txv is None:
+            id_txv = req.id_txv
+        if od_txv is None:
+            od_txv = req.od_txv
+
+    if id_txv is None and od_txv is None:
+        raise HTTPException(status_code=400, detail="id_txv or od_txv is required")
+
+    if id_txv is not None:
+        state.id_is_txv = (id_txv == 1)
+    if od_txv is not None:
+        state.od_is_txv = (od_txv == 1)
+
     persist_selected_runtime()
     return {"message": "OK"}
 
