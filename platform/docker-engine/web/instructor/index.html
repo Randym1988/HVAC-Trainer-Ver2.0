@@ -1158,14 +1158,18 @@ checkAuthStatus();
             const connected = edge.connected === 1;
             const isSelected = edge.edge_id === selectedEdgeId;
             const cardBorder = isSelected ? 'var(--accent-cyan)' : '#1e293b';
+            const cardBackground = '#050b14';
+            const cardShadow = 'none';
             const dotColor = connected ? 'var(--accent-green)' : 'var(--accent-red)';
             const statusText = connected ? 'Online' : `Offline (${edge.age_seconds}s)`;
             const rebootRequired = edge.identity_reboot_required === 1;
+            const selectedBadgeVisibility = isSelected ? 'visible' : 'hidden';
             return `
-                <div style="background:#050b14; border:1px solid ${cardBorder}; border-radius:10px; padding:14px; box-shadow: 0 4px 10px rgba(0,0,0,0.45);">
+                <div role="button" tabindex="0" style="background:${cardBackground}; border:1px solid ${cardBorder}; border-radius:10px; padding:14px; box-shadow:${cardShadow}; cursor:pointer; transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;" onclick="selectEdge('${edge.edge_id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectEdge('${edge.edge_id}');}">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px;">
                         <div style="font-size:13px; font-weight:800; color:var(--text-main);">${edge.label || edge.edge_id}</div>
                         <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-muted);">
+                            <span style="display:inline-flex; align-items:center; justify-content:center; min-width:68px; padding:2px 8px; border-radius:999px; border:1px solid rgba(6,182,212,0.55); background:rgba(6,182,212,0.18); color:#a5f3fc; font-weight:800; letter-spacing:0.4px; text-transform:uppercase; font-size:10px; visibility:${selectedBadgeVisibility};">Selected</span>
                             <span style="width:8px; height:8px; border-radius:50%; background:${dotColor}; display:inline-block;"></span>${statusText}
                         </div>
                     </div>
@@ -1174,10 +1178,9 @@ checkAuthStatus();
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Type: ${formatTrainerTypeLabel(edge.trainer_type)}</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">RSSI: ${edge.wifi_rssi ?? '--'} dBm | RAM: ${edge.ram ?? '--'}</div>
                     ${rebootRequired ? `<div style="color:var(--accent-yellow); font-size:11px; font-weight:700; margin-bottom:10px; padding: 6px; background: rgba(234,179,8,0.1); border-radius: 6px; text-align:center;">REBOOT REQUIRED</div>` : ''}
-                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
-                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; ${isSelected ? 'background:linear-gradient(180deg, #0ea5e9 0%, #0369a1 100%); color:white;' : ''}" onclick="selectEdge('${edge.edge_id}')">${isSelected ? 'Selected' : 'Select Trainer'}</button>
-                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; border-color:#713f12; color:#fde68a;" onclick="rebootEdge('${edge.edge_id}')">Reboot</button>
-                        <button class="btn" style="width:100%; justify-content:center; padding:10px; font-size:12px; border-color:#7f1d1d; color:#fecaca;" onclick="removeEdge('${edge.edge_id}')">Remove</button>
+                    <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; align-items:stretch;">
+                        <button class="btn" style="width:100%; min-width:0; justify-content:center; padding:9px 8px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-color:#713f12; color:#fde68a;" onclick="event.stopPropagation(); rebootEdge('${edge.edge_id}')">Reboot</button>
+                        <button class="btn" style="width:100%; min-width:0; justify-content:center; padding:9px 8px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-color:#7f1d1d; color:#fecaca;" onclick="event.stopPropagation(); removeEdge('${edge.edge_id}')">Remove</button>
                     </div>
                 </div>
             `;
