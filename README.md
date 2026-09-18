@@ -101,4 +101,4 @@ For uploads, use the guarded scripts in tools to enforce correct trainer identit
 
 ## License
 
-Proprietary project for Mitchell Media Vesta trainer platforms unless otherwise specified.
+Proprietary project for Mitchell HVAC trainer platforms unless otherwise specified.
