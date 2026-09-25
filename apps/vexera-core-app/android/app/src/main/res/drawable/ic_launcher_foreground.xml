@@ -4,7 +4,7 @@
     android:height="108dp"
     android:viewportHeight="108"
     android:viewportWidth="108">
-    <!-- Centered and Scaled Vesta Symbol -->
+    <!-- Centered and Scaled Vexera Symbol -->
     <!-- Original points were roughly 25-82. Scaled to be slightly larger and centered. -->
     <path
         android:pathData="M30,35 L54,80"

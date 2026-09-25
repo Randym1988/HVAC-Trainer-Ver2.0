@@ -4,7 +4,7 @@
     android:height="108dp"
     android:viewportHeight="108"
     android:viewportWidth="108">
-    <!-- Centered and Scaled Vesta Symbol -->
+    <!-- Centered and Scaled Vexera Symbol -->
     <path
         android:pathData="M30,35 L54,80"
         android:strokeColor="#0ea5e9"

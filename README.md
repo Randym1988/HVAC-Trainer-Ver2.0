@@ -1,8 +1,8 @@
-# Vesta Core Trainer Platform
+# Vexera Core Trainer Platform
 
 ## Executive Overview
 
-The Vesta Core Trainer Platform is an integrated HVAC training and assessment system designed to combine physical trainer hardware, embedded control logic, instructor orchestration, student interaction, and operational tooling in a single unified architecture. The platform is designed for realistic HVAC system instruction, live equipment diagnostics, and controlled training scenarios across two primary trainer configurations: straight-ac gas furnace and heat pump systems.
+The Vexera Core Trainer Platform is an integrated HVAC training and assessment system designed to combine physical trainer hardware, embedded control logic, instructor orchestration, student interaction, and operational tooling in a single unified architecture. The platform is designed for realistic HVAC system instruction, live equipment diagnostics, and controlled training scenarios across two primary trainer configurations: straight-ac gas furnace and heat pump systems.
 
 This repository consolidates the complete development environment for the platform, including:
 
@@ -19,7 +19,7 @@ The system is intended to support teaching environments in which students must d
 
 ## Product Scope
 
-The Vesta Core platform includes the following functional domains:
+The Vexera Core platform includes the following functional domains:
 
 ### 1. Physical Trainer Hardware
 
@@ -62,7 +62,7 @@ The Vesta Core platform includes the following functional domains:
 
 ### 6. Mobile and Native Experience
 
-- Capacitor-based Android app shell for Vesta Core
+- Capacitor-based Android app shell for Vexera Core
 - BLE-oriented trainer communication and local app integration
 - Portable diagnostic access for lab and field workflows
 
@@ -172,7 +172,7 @@ flowchart LR
 ```text
 HVAC Trainer Ver2.0/
 ├─ apps/
-│  └─ vesta-core-app/                     # Capacitor-based Android/mobile app shell
+│  └─ vexera-core-app/                    # Capacitor-based Android/mobile app shell
 ├─ hvac-next-gen/                          # Next-generation monorepo workspace for app and service evolution
 ├─ platform/
 │  └─ docker-engine/                      # Local engine stack, MQTT, instructor/student web assets
@@ -214,7 +214,7 @@ Key characteristics:
 - OTA update support after provisioning
 - Controlled upload path to avoid mismatched device assignment
 
-### Vesta Core Engine
+### Vexera Core Engine
 
 The local engine is implemented as a FastAPI application and is located under:
 
@@ -259,16 +259,16 @@ This portal provides:
 
 ### Mobile App Shell
 
-The Vesta Core mobile application shell is located here:
+The Vexera Core mobile application shell is located here:
 
-- `apps/vesta-core-app/`
+- `apps/vexera-core-app/`
 
 This project is structured as a Capacitor application targeting Android and includes:
 
 - Capacitor configuration and native Android packaging
 - Web-based app shell for device interaction
 - Bluetooth-related integration logic for trainer communication
-- A portable front-end layer aligned with the broader Vesta Core product concept
+- A portable front-end layer aligned with the broader Vexera Core product concept
 
 ---
 
@@ -398,9 +398,9 @@ Typical operational checks include:
 
 ## Intellectual Property and Proprietary Status
 
-This project represents a proprietary Vesta Core trainer platform and associated training architecture. The system, methods, and operational workflow described herein are intended for proprietary internal use and controlled deployment unless otherwise explicitly authorized in writing.
+This project represents a proprietary Vexera Core trainer platform and associated training architecture. The system, methods, and operational workflow described herein are intended for proprietary internal use and controlled deployment unless otherwise explicitly authorized in writing.
 
-All firmware, software, operational documentation, and training system interfaces within this repository are considered part of the Vesta Core platform and may be subject to licensing, confidentiality, and controlled distribution restrictions as defined by the governing organization.
+All firmware, software, operational documentation, and training system interfaces within this repository are considered part of the Vexera Core platform and may be subject to licensing, confidentiality, and controlled distribution restrictions as defined by the governing organization.
 
 Proprietary project for Mitchell HVAC trainer platforms unless otherwise specified.
 
@@ -408,6 +408,6 @@ Proprietary project for Mitchell HVAC trainer platforms unless otherwise specifi
 
 ## Summary
 
-The Vesta Core Trainer Platform is a complete HVAC training and diagnostics system that unifies hardware, software, and instructional workflows into a single operable architecture. It includes the physical trainer ecosystem, the embedded control layer, the local engine, the instructor control portal, the student application, and mobile integration support.
+The Vexera Core Trainer Platform is a complete HVAC training and diagnostics system that unifies hardware, software, and instructional workflows into a single operable architecture. It includes the physical trainer ecosystem, the embedded control layer, the local engine, the instructor control portal, the student application, and mobile integration support.
 
 This repository serves as the technical foundation for the platform and provides the operational and development environment necessary to design, deploy, and maintain advanced HVAC training systems in a structured and professional manner.

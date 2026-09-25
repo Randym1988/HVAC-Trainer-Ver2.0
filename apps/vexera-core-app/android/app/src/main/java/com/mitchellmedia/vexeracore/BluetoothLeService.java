@@ -1,4 +1,4 @@
-package com.mitchellmedia.vestacore;
+package com.mitchellmedia.vexeracore;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -58,7 +58,7 @@ public class BluetoothLeService extends Service {
         
         createNotificationChannel();
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Vesta Core Active")
+                .setContentTitle("Vexera Core Active")
                 .setContentText("Maintaining live telemetry stream with HVAC Trainer...")
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setPriority(NotificationCompat.PRIORITY_LOW)

@@ -58,54 +58,49 @@
           opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1),
           visibility 0.8s;
       }
-      .splash-v-logo {
-        width: 120px;
-        height: 120px;
-        margin-bottom: 20px;
+      #splash-overlay.photo-splash {
+        overflow: hidden;
+        background: #050b14;
       }
-      .v-svg-splash {
-        width: 100%;
-        height: 100%;
-        filter: drop-shadow(0 0 20px rgba(14, 165, 233, 0.5));
+      #splash-overlay.photo-splash::before {
+        position: absolute;
+        inset: -2%;
+        background: url("vexera-splash-photo-test.jfif") center / cover
+          no-repeat;
+        content: "";
+        animation: photo-splash-drift 1.8s ease-out both;
       }
-      .v-left-s {
-        fill: none;
-        stroke: #0ea5e9;
-        stroke-width: 8;
-        stroke-linecap: round;
-        stroke-dasharray: 100;
-        animation: drawS 2s ease-in-out infinite alternate;
+      #splash-overlay.photo-splash::after {
+        position: absolute;
+        inset: 0;
+        background: rgba(5, 11, 20, 0.08);
+        content: "";
+        transition: background 1.1s ease;
       }
-      .v-right-s {
-        fill: none;
-        stroke: #ef4444;
-        stroke-width: 8;
-        stroke-linecap: round;
-        stroke-dasharray: 100;
-        animation: drawS 2s ease-in-out infinite alternate-reverse;
+      #splash-overlay.photo-transition::before {
+        animation: photo-splash-fade 1.1s ease forwards;
       }
-      .v-core-s {
-        fill: white;
-        filter: drop-shadow(0 0 10px white);
-        animation: pulseS 1.5s infinite;
+      #splash-overlay.photo-transition::after {
+        background: rgba(5, 11, 20, 0.92);
       }
-      @keyframes drawS {
+      @keyframes photo-splash-drift {
         from {
-          stroke-dashoffset: 100;
+          transform: scale(1);
+          opacity: 0;
         }
         to {
-          stroke-dashoffset: 0;
-        }
-      }
-      @keyframes pulseS {
-        0%,
-        100% {
-          transform: scale(1);
+          transform: scale(1.03);
           opacity: 1;
         }
-        50% {
-          transform: scale(1.4);
-          opacity: 0.7;
+      }
+      @keyframes photo-splash-fade {
+        from {
+          opacity: 1;
+          transform: scale(1.03);
+        }
+        to {
+          opacity: 0;
+          transform: scale(1.08);
         }
       }
       .splash-text {
@@ -120,6 +115,7 @@
       }
       .splash-attribution {
         position: absolute;
+        z-index: 2;
         bottom: 28px;
         color: rgba(255, 255, 255, 0.42);
         font-size: 9px;
@@ -735,7 +731,7 @@
         height: 100%;
         background: var(--bg-base);
         z-index: 9998;
-        display: none;
+        display: flex;
         align-items: center;
         justify-content: center;
         transition: opacity 0.5s;
@@ -791,47 +787,6 @@
           DIAGNOSTIC ACCESS
         </p>
 
-        <!-- Embedded Trainer Connection on Login Screen -->
-        <div
-          style="
-            margin-bottom: 25px;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 20px;
-          "
-        >
-          <p
-            style="
-              color: var(--text-muted);
-              font-size: 9px;
-              font-weight: 800;
-              text-transform: uppercase;
-              margin-bottom: 10px;
-              letter-spacing: 1px;
-            "
-          >
-            Trainer Connection
-          </p>
-          <button
-            class="submit-btn"
-            id="btn-scan"
-            style="background: var(--accent-blue); margin-top: 0"
-            onclick="scanForTrainers()"
-          >
-            Scan for Trainers
-          </button>
-          <div id="trainer-list" style="margin-top: 15px">
-            <div
-              style="
-                text-align: center;
-                color: var(--text-faint);
-                font-size: 11px;
-              "
-            >
-              Not connected to trainer.
-            </div>
-          </div>
-        </div>
-
         <input
           type="text"
           id="login_user"
@@ -873,6 +828,23 @@
         >
           BEGIN SESSION
         </button>
+        <button
+          style="
+            width: 100%;
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 12px;
+            margin-top: 15px;
+            border-radius: 10px;
+            cursor: pointer;
+          "
+          onclick="bypassLogin()"
+        >
+          BYPASS LOGIN
+        </button>
         <div
           id="login_error"
           style="
@@ -887,17 +859,17 @@
         </div>
       </div>
     </div>
-    <div id="splash-overlay">
-      <div class="splash-v-logo">
-        <svg class="v-svg-splash" viewBox="0 0 100 100">
-          <path class="v-left-s" d="M10 15 L50 90" />
-          <path class="v-right-s" d="M90 15 L50 90" />
-          <circle class="v-core-s" cx="50" cy="90" r="6" />
-        </svg>
-      </div>
-      <div class="splash-text">Vexera Core</div>
-      <div class="splash-attribution">Powered By Alpha &amp; Omega Engine</div>
-    </div>
+    <script>
+      if (document.cookie.includes("vexera_auth=")) {
+        document.getElementById("login-overlay").style.display = "none";
+      }
+    </script>
+
+    <div
+      id="splash-overlay"
+      class="photo-splash"
+      aria-label="Vexera Core splash screen"
+    ></div>
 
     <div class="header">
       <div class="brand">
@@ -992,17 +964,18 @@
     <div class="viewport" id="viewport">
       <div id="content-wrapper">
         <div id="view-refrigeration" class="view active">
-          <div
-            class="context-grid"
-            style="grid-template-columns: repeat(2, 1fr)"
-          >
+          <div class="context-grid">
             <div class="context-chip">
               <span class="label">Outdoor DB</span
               ><span class="val" id="od_ambient">--°</span>
             </div>
             <div class="context-chip">
+              <span class="label">Target SH</span
+              ><span class="val text-blue">12.0°</span>
+            </div>
+            <div class="context-chip">
               <span class="label">Target SC</span
-              ><span class="val text-red">8.0°</span>
+              ><span class="val text-red">10.0°</span>
             </div>
           </div>
           <div class="data-grid" style="margin-bottom: 15px">
@@ -1082,6 +1055,20 @@
                     ><span class="unit">°F</span>
                   </div>
                 </div>
+                <div class="data-cell">
+                  <span class="label text-blue">Indoor Suction Line</span>
+                  <div>
+                    <span class="val" id="id_suction_temp">--</span
+                    ><span class="unit">°F</span>
+                  </div>
+                </div>
+                <div class="data-cell">
+                  <span class="label text-red">Indoor Liquid Line</span>
+                  <div>
+                    <span class="val" id="id_liquid_temp">--</span
+                    ><span class="unit">°F</span>
+                  </div>
+                </div>
               </div>
               <div class="highlight-row text-red">
                 <span class="label">System Subcooling</span
@@ -1104,27 +1091,6 @@
                   <span style="color: var(--text-faint); margin: 0 6px">|</span>
                   <span class="val" id="discharge_sat_val">--</span
                   ><span class="unit">°F SAT</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="card theme-green">
-            <div class="card-header"><span>Indoor Coil Temperatures</span></div>
-            <div class="card-body">
-              <div class="data-grid">
-                <div class="data-cell">
-                  <span class="label text-blue">Indoor Suction Line</span>
-                  <div>
-                    <span class="val text-blue" id="id_suction_temp">--</span
-                    ><span class="unit">°F</span>
-                  </div>
-                </div>
-                <div class="data-cell">
-                  <span class="label text-red">Indoor Liquid Line</span>
-                  <div>
-                    <span class="val text-red" id="id_liquid_temp">--</span
-                    ><span class="unit">°F</span>
-                  </div>
                 </div>
               </div>
             </div>
@@ -1410,13 +1376,13 @@
               </p>
               <button
                 class="submit-btn"
-                id="btn-scan-settings"
+                id="btn-scan"
                 style="background: var(--accent-blue)"
                 onclick="scanForTrainers()"
               >
                 Scan for Trainers
               </button>
-              <div id="trainer-list-settings" style="margin-top: 20px">
+              <div id="trainer-list" style="margin-top: 20px">
                 <div
                   style="
                     text-align: center;
@@ -1491,14 +1457,16 @@
 
     <script>
       let ws;
-
       let activeHost =
         localStorage.getItem("vexera_engine_host") ||
         window.location.host ||
-        "localhost:8000"; // Fallback for mobile/BLE workflows
+        "localhost:8000";
+
       function getTargetHost() {
         const hostWithPort = window.location.host;
-        if (hostWithPort && hostWithPort !== "") return hostWithPort;
+        if (hostWithPort && hostWithPort.length > 0) {
+          return hostWithPort;
+        }
         return activeHost;
       }
 
@@ -1526,12 +1494,9 @@
       }
 
       function logoutUser() {
-        fetch("/api/logout", {
-          method: "POST",
-          credentials: "include",
-        }).finally(() => {
-          window.location.href = "/student";
-        });
+        document.cookie =
+          "vexera_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+        window.location.href = "/student";
       }
       function switchView(viewId, element) {
         document
@@ -1680,24 +1645,29 @@
         if (data.refrigerant)
           document.getElementById("refrigerant_type").value = data.refrigerant;
 
-        // Handle BLE login feedback
-        if (data.ble_login_status) {
-          if (data.ble_login_status === "success") {
-            document.getElementById("login-overlay").style.display = "none";
-            const navDock = document.querySelector(".nav-dock");
-            if (navDock) navDock.style.display = "flex";
-            switchView(
-              "view-refrigeration",
-              document.querySelector(".nav-btn"),
+        // Handle BLE / WebSocket diagnosis response feedback
+        if (data.diagnosis && data.diagnosis !== lastShownDiagnosis) {
+          lastShownDiagnosis = data.diagnosis;
+          if (data.diagnosis.startsWith("CORRECT:")) {
+            showResultPopup(
+              "CORRECT!",
+              "Your diagnosis was correct. The system has been reset.",
+              "success",
             );
-          } else if (data.ble_login_status === "denied") {
-            document.getElementById("login_error").style.display = "block";
+          } else if (data.diagnosis.startsWith("INCORRECT:")) {
+            showResultPopup(
+              "INCORRECT",
+              "That is not the correct diagnosis. Please try again. Your score has decreased.",
+              "error",
+            );
           }
         }
-
-        document.getElementById("mode_ac").style.display = data.y_call
-          ? "inline"
-          : "none";
+        document.getElementById("mode_ac").style.display =
+          data.y_call && data.o_call && !data.is_defrosting ? "inline" : "none";
+        document.getElementById("mode_hp").style.display =
+          data.y_call && !data.o_call && !data.is_defrosting
+            ? "inline"
+            : "none";
 
         document.getElementById("indoor_metering").textContent =
           data.indoor_metering || "--";
@@ -1705,7 +1675,7 @@
           data.outdoor_metering || "--";
 
         let lowSat = getSaturationTemp(data.od_low_press);
-        let liquidSat = getSaturationTemp(data.od_high_press);
+        let liquidSat = getSaturationTemp(data.od_liquid_press);
         let dischargeSat = getSaturationTemp(data.od_high_press);
 
         let sh =
@@ -1722,7 +1692,8 @@
         updateDOM("suction_temp", data.od_suction_temp, true);
         updateDOM("superheat", sh, true);
 
-        updateDOM("liquid_press", data.od_high_press);
+        // Fixed Mapping: Decoupled high side target to pull from liquid pressure stream
+        updateDOM("liquid_press", data.od_liquid_press);
         updateDOM("high_sat", liquidSat, true);
         updateDOM("liquid_temp", data.od_liquid_temp, true);
         updateDOM("subcool", sc, true);
@@ -1945,97 +1916,95 @@
       }
 
       function attemptLogin(type) {
-        let u = document
-          .getElementById("login_user")
-          .value.trim()
-          .toLowerCase();
+        let u = document.getElementById("login_user").value.trim();
         let p = document.getElementById("login_pass").value.trim();
-        document.getElementById("login_error").style.display = "none";
+        fetch(
+          `${getApiBaseUrl()}/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${type}`,
+        ).then((r) => {
+          if (r.ok) {
+            document.cookie = "vexera_auth=student; path=/";
+            document.getElementById("login-overlay").style.display = "none";
+          } else document.getElementById("login_error").style.display = "block";
+        });
+      }
+      function bypassLogin() {
+        document.cookie = "vexera_auth=guest; path=/";
+        document.getElementById("login-overlay").style.display = "none";
+      }
 
-        if (window.isBleConnected && window.connectedDeviceId) {
-          const BleClient =
-            (window.capacitorCommunityBluetoothLe &&
-              window.capacitorCommunityBluetoothLe.BleClient) ||
-            (window.Capacitor &&
-              window.Capacitor.Plugins &&
-              window.Capacitor.Plugins.BleClient);
-          if (BleClient) {
-            let SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-            let RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+      const discoveredTrainerNames = {};
+      const trainerNameByMac = {
+        "C0:4E:30:34:4B:E4": "Trainer 01",
+        "3C:84:27:F8:03:1C": "Trainer 02",
+      };
+      const trainerNameByMacPrefix = {
+        "C0:4E": "Trainer 01",
+        "3C:84": "Trainer 02",
+      };
 
-            BleClient.getServices(window.connectedDeviceId)
-              .then((services) => {
-                const hasNordic = services.some(
-                  (s) => s.uuid.toLowerCase() === SERVICE_UUID,
-                );
-                if (!hasNordic) {
-                  SERVICE_UUID = "12a59900-173d-465c-914a-7a49c32c4438";
-                  RX_CHAR_UUID = "12a59902-173d-465c-914a-7a49c32c4438";
-                }
+      function sanitizeBleTrainerName(name) {
+        const cleaned = String(name || "")
+          .replace(/\u0000/g, "")
+          .trim();
+        // Normalize common variants like "Trainer01" -> "Trainer 01" for consistency.
+        const compactMatch = cleaned.match(/^trainer\s*0*(\d{1,3})$/i);
+        if (compactMatch) {
+          return `Trainer ${compactMatch[1].padStart(2, "0")}`;
+        }
+        return cleaned;
+      }
 
-                const payload = JSON.stringify({ user: u, pass: p });
-                let dataView;
-                if (
-                  window.capacitorCommunityBluetoothLe &&
-                  window.capacitorCommunityBluetoothLe.textToDataView
-                ) {
-                  dataView =
-                    window.capacitorCommunityBluetoothLe.textToDataView(
-                      payload,
-                    );
-                } else {
-                  let bytes;
-                  if (typeof TextEncoder !== "undefined") {
-                    bytes = new TextEncoder().encode(payload);
-                  } else {
-                    bytes = new Uint8Array(payload.length);
-                    for (let i = 0; i < payload.length; i++) {
-                      bytes[i] = payload.charCodeAt(i);
-                    }
-                  }
-                  dataView = new DataView(
-                    bytes.buffer,
-                    bytes.byteOffset,
-                    bytes.byteLength,
-                  );
-                }
+      function normalizeMacFromDeviceId(deviceId) {
+        const raw = String(deviceId || "")
+          .trim()
+          .toUpperCase();
+        if (!raw) return "";
+        const compact = raw.replace(/[^0-9A-F]/g, "");
+        if (compact.length < 12) return raw;
+        const mac = compact
+          .substring(0, 12)
+          .match(/.{1,2}/g)
+          .join(":");
+        return mac;
+      }
 
-                return BleClient.write(
-                  window.connectedDeviceId,
-                  SERVICE_UUID,
-                  RX_CHAR_UUID,
-                  dataView,
-                );
-              })
-              .catch((err) => {
-                console.error("Login verification failed over BLE:", err);
-                document.getElementById("login_error").style.display = "block";
-              });
-            return;
+      function resolveTrainerNameFromDeviceId(deviceId) {
+        const normalizedMac = normalizeMacFromDeviceId(deviceId);
+        if (trainerNameByMac[normalizedMac]) {
+          return trainerNameByMac[normalizedMac];
+        }
+
+        const upperRaw = String(deviceId || "")
+          .trim()
+          .toUpperCase();
+        for (const prefix of Object.keys(trainerNameByMacPrefix)) {
+          if (upperRaw.startsWith(prefix)) {
+            return trainerNameByMacPrefix[prefix];
+          }
+          if (normalizedMac.startsWith(prefix)) {
+            return trainerNameByMacPrefix[prefix];
           }
         }
 
-        fetch(
-          `${getApiBaseUrl()}/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${type}`,
-          { credentials: "include" },
-        )
-          .then((r) => {
-            if (r.ok) {
-              document.getElementById("login-overlay").style.display = "none";
-              const navDock = document.querySelector(".nav-dock");
-              if (navDock) navDock.style.display = "flex";
-              switchView(
-                "view-refrigeration",
-                document.querySelector(".nav-btn"),
-              );
-            } else {
-              document.getElementById("login_error").style.display = "block";
-            }
-          })
-          .catch((err) => {
-            console.error("Login verification failed:", err);
-            document.getElementById("login_error").style.display = "block";
-          });
+        return "";
+      }
+
+      function resolveScanDisplayName(result) {
+        // Android may return stale bonded aliases in device.name; prefer live advertisement localName.
+        const advertisedName = sanitizeBleTrainerName(result.localName);
+        if (advertisedName) {
+          return advertisedName;
+        }
+
+        // Some Android scans omit localName; map known trainer IDs/MAC prefixes deterministically.
+        const mappedTrainerName = resolveTrainerNameFromDeviceId(
+          result.device.deviceId,
+        );
+        if (mappedTrainerName) {
+          return mappedTrainerName;
+        }
+
+        return `Trainer (${result.device.deviceId.substring(0, 6)})`;
       }
 
       async function scanForTrainers() {
@@ -2060,17 +2029,11 @@
 
           await BleClient.initialize();
           const list = document.getElementById("trainer-list");
-          if (list)
-            list.innerHTML =
-              '<div style="text-align: center; color: var(--accent-blue);">Scanning for Vexera trainers...</div>';
-          const listSettings = document.getElementById("trainer-list-settings");
-          if (listSettings)
-            listSettings.innerHTML =
-              '<div style="text-align: center; color: var(--accent-blue);">Scanning for Vexera trainers...</div>';
+          list.innerHTML =
+            '<div style="text-align: center; color: var(--accent-blue);">Scanning for Vexera trainers...</div>';
 
           const discovered = [];
           await BleClient.requestLEScan({}, (result) => {
-            const name = result.device.name || result.localName;
             const hasVexeraService =
               result.uuids &&
               result.uuids.some((uuid) => {
@@ -2080,17 +2043,15 @@
                   lUuid === "12a59900-173d-465c-914a-7a49c32c4438"
                 );
               });
-            const matchesName =
-              name &&
-              (name.toLowerCase().includes("vexera core hp trainer") ||
-                name.toLowerCase().includes("comfortsc"));
-            if (matchesName || hasVexeraService) {
+
+            // Rely on the service UUID for discovery, which is more robust than a hardcoded name.
+            if (hasVexeraService) {
               if (
                 !discovered.find((d) => d.deviceId === result.device.deviceId)
               ) {
-                if (!result.device.name) {
-                  result.device.name = name || "Vexera Core HP trainer";
-                }
+                result.device.name = resolveScanDisplayName(result);
+                discoveredTrainerNames[result.device.deviceId] =
+                  result.device.name;
                 discovered.push(result.device);
                 renderTrainerList(discovered);
               }
@@ -2100,10 +2061,8 @@
           setTimeout(async () => {
             await BleClient.stopLEScan();
             if (discovered.length === 0) {
-              const noResultsHtml =
+              list.innerHTML =
                 '<div style="text-align: center; color: var(--text-faint);">No Vexera trainers found nearby.</div>';
-              if (list) list.innerHTML = noResultsHtml;
-              if (listSettings) listSettings.innerHTML = noResultsHtml;
             }
           }, 5000);
         } catch (err) {
@@ -2112,7 +2071,8 @@
       }
 
       function renderTrainerList(devices) {
-        const html = devices
+        const list = document.getElementById("trainer-list");
+        list.innerHTML = devices
           .map(
             (d) => `
             <div class="trainer-item">
@@ -2125,11 +2085,6 @@
         `,
           )
           .join("");
-
-        const list = document.getElementById("trainer-list");
-        if (list) list.innerHTML = html;
-        const listSettings = document.getElementById("trainer-list-settings");
-        if (listSettings) listSettings.innerHTML = html;
       }
 
       function handleBleTelemetry(bleData) {
@@ -2177,6 +2132,9 @@
 
       async function connectToTrainer(deviceId) {
         try {
+          const trainerName =
+            discoveredTrainerNames[deviceId] ||
+            `Trainer (${deviceId.substring(0, 6)})`;
           const BleClient =
             (window.capacitorCommunityBluetoothLe &&
               window.capacitorCommunityBluetoothLe.BleClient) ||
@@ -2189,76 +2147,38 @@
           }
 
           const list = document.getElementById("trainer-list");
-          if (list)
-            list.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${deviceId}...</div>`;
-          const listSettings = document.getElementById("trainer-list-settings");
-          if (listSettings)
-            listSettings.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${deviceId}...</div>`;
+          list.innerHTML = `<div style="text-align: center; color: var(--accent-yellow);">Connecting to ${trainerName}...</div>`;
 
           await BleClient.connect(deviceId, (disconnectedId) => {
             alert("Trainer Disconnected: " + disconnectedId);
             window.isBleConnected = false;
-
-            const disconnectedHtml =
+            document.getElementById("trainer-list").innerHTML =
               '<div style="text-align: center; color: var(--text-faint);">Disconnected from trainer. Click Scan to reconnect.</div>';
-            if (list) list.innerHTML = disconnectedHtml;
-            if (listSettings) listSettings.innerHTML = disconnectedHtml;
-
             document.getElementById("ws-status").classList.remove("live");
             setTimeout(initWS, 1000);
           });
 
-          const connectedHtml = `<div style="text-align: center; color: var(--accent-green);">Connected! Discovering services...</div>`;
-          if (list) list.innerHTML = connectedHtml;
-          if (listSettings) listSettings.innerHTML = connectedHtml;
+          list.innerHTML = `<div style="text-align: center; color: var(--accent-green);">Connected! Discovering services...</div>`;
 
-          // Compatibility: some plugin versions don't expose requestMtu/discoverServices/getServices.
-          if (
-            window.Capacitor &&
-            window.Capacitor.getPlatform &&
-            window.Capacitor.getPlatform() === "android"
-          ) {
-            const requestMtuFn = BleClient.requestMtu || BleClient.requestMTU;
-            if (typeof requestMtuFn === "function") {
-              try {
-                await requestMtuFn.call(BleClient, deviceId, 256);
-              } catch (mtuErr) {
-                console.warn(
-                  "MTU request failed; continuing with default MTU",
-                  mtuErr,
-                );
-              }
-            }
-          }
+          // On Android/iOS, you MUST discover services before subscribing to notifications!
+          await BleClient.discoverServices(deviceId);
 
-          if (typeof BleClient.discoverServices === "function") {
-            try {
-              await BleClient.discoverServices(deviceId);
-            } catch (discoverErr) {
-              console.warn("discoverServices failed; continuing", discoverErr);
-            }
-          }
-
-          const streamHtml = `<div style="text-align: center; color: var(--accent-green);">Setting up data stream...</div>`;
-          if (list) list.innerHTML = streamHtml;
-          if (listSettings) listSettings.innerHTML = streamHtml;
+          list.innerHTML = `<div style="text-align: center; color: var(--accent-green);">Setting up data stream...</div>`;
 
           let SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
           let CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
-          if (typeof BleClient.getServices === "function") {
-            try {
-              const services = await BleClient.getServices(deviceId);
-              const hasNordic = services.some(
-                (s) => s.uuid.toLowerCase() === SERVICE_UUID,
-              );
-              if (!hasNordic) {
-                SERVICE_UUID = "12a59900-173d-465c-914a-7a49c32c4438";
-                CHAR_UUID = "12a59901-173d-465c-914a-7a49c32c4438";
-              }
-            } catch (err) {
-              console.warn("Failed to query services, using defaults:", err);
+          try {
+            const services = await BleClient.getServices(deviceId);
+            const hasNordic = services.some(
+              (s) => s.uuid.toLowerCase() === SERVICE_UUID,
+            );
+            if (!hasNordic) {
+              SERVICE_UUID = "12a59900-173d-465c-914a-7a49c32c4438";
+              CHAR_UUID = "12a59901-173d-465c-914a-7a49c32c4438";
             }
+          } catch (err) {
+            console.warn("Failed to query services, using defaults:", err);
           }
 
           let bleBuffer = "";
@@ -2318,15 +2238,13 @@
             },
           );
 
-          const successCardHtml = `
+          list.innerHTML = `
                 <div style="text-align: center; color: var(--accent-green); padding: 10px; border: 1px solid var(--accent-green); border-radius: 8px; margin-bottom: 10px;">
-                    <div style="font-weight: bold;">🟢 Connected to Trainer</div>
+                    <div style="font-weight: bold;">🟢 Connected to ${trainerName}</div>
                     <div style="font-size: 11px; opacity: 0.7; margin-bottom: 8px;">Device ID: ${deviceId}</div>
                     <button class="connect-btn" style="background: var(--accent-red); margin-top: 5px; width: 100%; border-radius: 6px; padding: 8px; color: white; border: none; font-weight: bold;" onclick="disconnectTrainer('${deviceId}')">Disconnect</button>
                 </div>
             `;
-          if (list) list.innerHTML = successCardHtml;
-          if (listSettings) listSettings.innerHTML = successCardHtml;
 
           window.connectedDeviceId = deviceId;
           window.isBleConnected = true;
@@ -2337,7 +2255,10 @@
           }
 
           let splash = document.getElementById("splash-overlay");
-          if (splash) splash.classList.add("hidden");
+          if (splash) {
+            setTimeout(() => splash.classList.add("photo-transition"), 2300);
+            setTimeout(() => splash.classList.add("hidden"), 3400);
+          }
 
           document.getElementById("ws-status").classList.add("live");
         } catch (error) {
@@ -2354,7 +2275,10 @@
         ws.onopen = () => {
           document.getElementById("ws-status").classList.add("live");
           let splash = document.getElementById("splash-overlay");
-          if (splash) splash.classList.add("hidden");
+          if (splash) {
+            setTimeout(() => splash.classList.add("photo-transition"), 2300);
+            setTimeout(() => splash.classList.add("hidden"), 3400);
+          }
         };
 
         ws.onclose = () => {
@@ -2372,47 +2296,39 @@
           }
         };
       }
+
+      window.addEventListener("telemetryData", (event) => {
+        try {
+          const payload = JSON.parse(event.detail || "{}");
+          const rawValue =
+            typeof payload.value === "string" ? payload.value.trim() : "";
+          if (!rawValue) {
+            return;
+          }
+
+          const data = JSON.parse(rawValue);
+          if (data.lp !== undefined) {
+            handleBleTelemetry(data);
+          } else {
+            processTelemetry(data);
+          }
+        } catch (error) {
+          console.error(
+            "Native telemetry event parse error:",
+            error,
+            event?.detail,
+          );
+        }
+      });
+
       window.addEventListener("load", initWS);
       window.addEventListener("load", () => {
-        // Startup authentication checks
-        function checkAuthStatus() {
-          fetch("/api/auth/check", { credentials: "include" })
-            .then((res) => {
-              if (!res.ok) throw new Error("unauthenticated");
-              document.getElementById("login-overlay").style.display = "none";
-            })
-            .catch(() => {
-              const navDock = document.querySelector(".nav-dock");
-              if (navDock) navDock.style.display = "none";
-              document.getElementById("login-overlay").style.display = "flex";
-            });
-        }
-        checkAuthStatus();
-
-        // Auto-detect if we are on the ESP32 SoftAP (192.168.4.1)
-        fetch("http://192.168.4.1/api/status", {
-          method: "GET",
-          mode: "no-cors",
-        })
-          .then(() => {
-            activeHost = "192.168.4.1";
-            localStorage.setItem("vexera_engine_host", activeHost);
-            console.log("ComfortSC SoftAP (192.168.4.1) detected!");
-            if (ws) {
-              try {
-                ws.close();
-              } catch (e) {}
-            }
-          })
-          .catch(() => {
-            console.log(
-              "SoftAP not found, defaulting to Station IP: " + activeHost,
-            );
-          });
-
+        const splash = document.getElementById("splash-overlay");
+        setTimeout(() => splash.classList.add("photo-transition"), 2300);
+        setTimeout(() => splash.classList.add("hidden"), 3400);
         setTimeout(() => {
-          document.getElementById("splash-overlay").style.display = "none";
-        }, 1500);
+          splash.style.display = "none";
+        }, 4300);
         document
           .getElementById("refrigerant_type")
           .addEventListener("change", (e) => {

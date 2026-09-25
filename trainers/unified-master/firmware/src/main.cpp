@@ -358,7 +358,7 @@ String discoverEngineBaseUrl(bool allowStored = true) {
   String stored = loadEngineBaseUrl();
   if (allowStored && stored.length() > 0) return stored;
 
-  const char* hostCandidates[] = {"trainer-engine", "trainer-engine.local", "vesta-engine", "vesta-engine.local", "hvac-engine", "hvac-engine.local"};
+  const char* hostCandidates[] = {"trainer-engine", "trainer-engine.local", "vexera-engine", "vexera-engine.local", "hvac-engine", "hvac-engine.local"};
   for (const char* host : hostCandidates) {
     IPAddress resolved = MDNS.queryHost(host);
     if (resolved != IPAddress(0, 0, 0, 0)) {
@@ -406,7 +406,7 @@ String discoverEngineBaseUrl(bool allowStored = true) {
 void initUserDatabase() {
   if (!LittleFS.exists("/users.json")) {
     File f = LittleFS.open("/users.json", FILE_WRITE);
-    f.print("{\"admin\":{\"pw\":\"VestaAdmin\",\"role\":\"instructor\"},\"student1\":{\"pw\":\"hvac2026\",\"role\":\"student\"}}");
+    f.print("{\"admin\":{\"pw\":\"VexeraAdmin\",\"role\":\"instructor\"},\"student1\":{\"pw\":\"hvac2026\",\"role\":\"student\"}}");
     f.close();
   }
 }
@@ -1018,7 +1018,7 @@ void setup() {
     is_ap_mode = true;
     wifi_was_connected = false;
     WiFi.mode(WIFI_AP);
-    setup_ap_active = WiFi.softAP("Vesta Core Trainer", "8037945526"); 
+    setup_ap_active = WiFi.softAP("Vexera Core Trainer", "8037945526");
     dnsServer.start(53, "*", WiFi.softAPIP()); 
   }
   
@@ -2137,7 +2137,7 @@ void runCommsSlice() {
       Serial.println("WiFi reconnect timeout. Switching to AP mode.");
       is_ap_mode = true;
       WiFi.mode(WIFI_AP);
-      setup_ap_active = WiFi.softAP("Vesta Core Trainer", "8037945526");
+      setup_ap_active = WiFi.softAP("Vexera Core Trainer", "8037945526");
       dnsServer.start(53, "*", WiFi.softAPIP());
       wifi_reconnect_timer = now;
       wifi_disconnected_since = now;

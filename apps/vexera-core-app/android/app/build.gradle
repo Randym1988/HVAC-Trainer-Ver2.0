@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.mitchellmedia.vestacore"
+    namespace = "com.mitchellmedia.vexeracore"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.mitchellmedia.vestacore"
+        applicationId "com.mitchellmedia.vexeracore"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

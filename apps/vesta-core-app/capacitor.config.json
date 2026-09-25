@@ -1,8 +1,0 @@
-{
-  "appId": "com.mitchellmedia.vestacore",
-  "appName": "Vesta Core",
-  "webDir": "www",
-  "server": {
-    "androidScheme": "http"
-  }
-}

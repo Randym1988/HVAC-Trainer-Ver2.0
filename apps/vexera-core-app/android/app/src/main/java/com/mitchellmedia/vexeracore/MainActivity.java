@@ -1,4 +1,4 @@
-package com.mitchellmedia.vestacore;
+package com.mitchellmedia.vexeracore;
 
 import android.os.Build;
 import android.os.Bundle;
