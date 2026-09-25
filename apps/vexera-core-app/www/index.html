@@ -58,50 +58,224 @@
           opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1),
           visibility 0.8s;
       }
-      #splash-overlay.photo-splash {
+      #splash-overlay.code-splash {
         overflow: hidden;
         background: #050b14;
       }
-      #splash-overlay.photo-splash::before {
-        position: absolute;
-        inset: -2%;
-        background: url("vexera-splash-photo-test.jfif") center / cover
-          no-repeat;
-        content: "";
-        animation: photo-splash-drift 1.8s ease-out both;
-      }
-      #splash-overlay.photo-splash::after {
+      .code-splash-scene {
         position: absolute;
         inset: 0;
-        background: rgba(5, 11, 20, 0.08);
-        content: "";
-        transition: background 1.1s ease;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        animation: scene-in 1.2s ease-out 0.15s forwards;
       }
-      #splash-overlay.photo-transition::before {
-        animation: photo-splash-fade 1.1s ease forwards;
+      .code-splash-grid {
+        fill: none;
+        stroke: rgba(36, 145, 198, 0.45);
+        stroke-width: 0.7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 90 18;
+        animation: circuit-flow 5s linear infinite;
       }
-      #splash-overlay.photo-transition::after {
-        background: rgba(5, 11, 20, 0.92);
+      .code-splash-grid.red {
+        stroke: rgba(239, 68, 68, 0.4);
       }
-      @keyframes photo-splash-drift {
+      .code-splash-panel {
+        fill: rgba(7, 23, 38, 0.78);
+        stroke: rgba(67, 193, 235, 0.56);
+        stroke-width: 1;
+        filter: drop-shadow(0 0 15px rgba(14, 165, 233, 0.24));
+      }
+      .code-splash-line {
+        fill: none;
+        stroke: #57d9f2;
+        stroke-width: 1.1;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .code-splash-line.red {
+        stroke: #f15c67;
+      }
+      .code-splash-node {
+        fill: #75f4ff;
+        filter: drop-shadow(0 0 5px #28d7f3);
+        animation: node-pulse 1.8s ease-in-out infinite;
+      }
+      .code-splash-node.red {
+        fill: #ff6d77;
+        filter: drop-shadow(0 0 5px #ef4444);
+      }
+      .code-splash-relay {
+        fill: rgba(13, 39, 55, 0.95);
+        stroke: rgba(97, 212, 239, 0.62);
+        stroke-width: 0.8;
+      }
+      .code-splash-relay-light {
+        fill: #65f6ff;
+        filter: drop-shadow(0 0 5px #20d8ee);
+        animation: node-pulse 1.4s ease-in-out infinite alternate;
+      }
+      .code-splash-relay-light.red {
+        fill: #ff5b69;
+        filter: drop-shadow(0 0 5px #ef4444);
+      }
+      .code-splash-v {
+        fill: none;
+        stroke-linecap: round;
+        stroke-width: 2.8;
+        stroke-dasharray: 115;
+        animation: v-draw 1.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.45s both;
+      }
+      .code-splash-v.blue {
+        stroke: #31d7f0;
+        filter: drop-shadow(0 0 8px rgba(49, 215, 240, 0.85));
+      }
+      .code-splash-v.red {
+        stroke: #f65e70;
+        filter: drop-shadow(0 0 8px rgba(246, 94, 112, 0.7));
+        animation-delay: 0.62s;
+      }
+      .code-splash-core {
+        fill: #effcff;
+        filter: drop-shadow(0 0 10px #7ef4ff);
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: core-pulse 1.4s ease-in-out infinite;
+      }
+      .code-splash-label {
+        fill: rgba(171, 228, 244, 0.78);
+        font-family: Arial, sans-serif;
+        font-size: 4px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+      .code-splash-brand {
+        position: absolute;
+        z-index: 2;
+        left: 50%;
+        top: 46%;
+        width: min(90vw, 390px);
+        transform: translate(-50%, -50%) scale(0.86);
+        text-align: center;
+        color: #f7fdff;
+        opacity: 0;
+        animation: brand-in 1.1s cubic-bezier(0.2, 0.8, 0.2, 1) 0.7s forwards;
+      }
+      .code-splash-brand-name {
+        font-family: Arial, sans-serif;
+        font-size: clamp(38px, 13vw, 72px);
+        font-weight: 900;
+        letter-spacing: 5px;
+        line-height: 0.9;
+        text-shadow: 0 0 18px rgba(255, 255, 255, 0.45);
+      }
+      .code-splash-brand-core {
+        margin-top: 10px;
+        color: #67f5ff;
+        font-family: Arial, sans-serif;
+        font-size: clamp(26px, 9vw, 48px);
+        font-weight: 800;
+        letter-spacing: 8px;
+        line-height: 0.9;
+        text-shadow: 0 0 18px rgba(66, 237, 255, 0.62);
+      }
+      .code-splash-tagline {
+        margin-top: 23px;
+        color: rgba(255, 255, 255, 0.88);
+        font-family: Arial, sans-serif;
+        font-size: clamp(13px, 4.2vw, 21px);
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        line-height: 1.45;
+      }
+      #splash-overlay.code-transition .code-splash-scene,
+      #splash-overlay.code-transition .code-splash-brand {
+        animation: scene-out 0.9s ease forwards;
+      }
+      #splash-overlay.code-transition .code-splash-brand {
+        animation-name: brand-out;
+      }
+      @keyframes scene-in {
+        to {
+          opacity: 1;
+        }
+      }
+      @keyframes scene-out {
+        to {
+          opacity: 0;
+          transform: scale(1.04);
+        }
+      }
+      @keyframes brand-in {
+        to {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+      }
+      @keyframes brand-out {
+        to {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(1.12);
+        }
+      }
+      @keyframes circuit-flow {
+        to {
+          stroke-dashoffset: -216;
+        }
+      }
+      @keyframes node-pulse {
+        0%,
+        100% {
+          opacity: 0.45;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      @keyframes v-draw {
         from {
+          stroke-dashoffset: 115;
+          opacity: 0;
+        }
+        to {
+          stroke-dashoffset: 0;
+          opacity: 1;
+        }
+      }
+      @keyframes core-pulse {
+        0%,
+        100% {
           transform: scale(1);
-          opacity: 0;
+          opacity: 0.9;
         }
-        to {
-          transform: scale(1.03);
+        50% {
+          transform: scale(1.35);
           opacity: 1;
         }
       }
-      @keyframes photo-splash-fade {
-        from {
-          opacity: 1;
-          transform: scale(1.03);
-        }
-        to {
-          opacity: 0;
-          transform: scale(1.08);
-        }
+      #splash-overlay.code-splash::before {
+        position: absolute;
+        inset: -2%;
+        background:
+          radial-gradient(
+            circle at 50% 38%,
+            rgba(29, 121, 160, 0.18),
+            transparent 34%
+          ),
+          linear-gradient(145deg, #071421, #02070d 70%);
+        content: "";
+      }
+      #splash-overlay.code-splash::after {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(3, 10, 18, 0.08),
+          rgba(3, 10, 18, 0.46)
+        );
+        content: "";
       }
       .splash-text {
         font-size: 14px;
@@ -867,9 +1041,96 @@
 
     <div
       id="splash-overlay"
-      class="photo-splash"
+      class="code-splash"
       aria-label="Vexera Core splash screen"
-    ></div>
+    >
+      <svg
+        class="code-splash-scene"
+        viewBox="0 0 100 180"
+        preserveAspectRatio="xMidYMid slice"
+        aria-hidden="true"
+      >
+        <path
+          class="code-splash-grid"
+          d="M0 18H18l5 5h14M0 35h12l5-5h18l5 5h18M100 15H82l-5 5H62M100 33H86l-5 5H61l-5-5H43M0 142h15l6-6h17M100 155H84l-6-6H62M5 166h21l5-7h19l6 7h18"
+        />
+        <path
+          class="code-splash-grid red"
+          d="M0 52h15l4 5h13M100 58H85l-4 5H67M0 118h13l5-5h15M100 109H85l-5 5H63"
+        />
+        <rect
+          class="code-splash-panel"
+          x="8"
+          y="62"
+          width="84"
+          height="65"
+          rx="3"
+        />
+        <path
+          class="code-splash-line"
+          d="M14 73h17l4-4h12M14 79h10l4 4h18M86 72H70l-5 5H52M86 83H73l-4 5H54M20 112h14l5-5h12M80 111H66l-5-5H48"
+        />
+        <circle class="code-splash-node" cx="31" cy="73" r="1.1" />
+        <circle class="code-splash-node red" cx="70" cy="72" r="1.1" />
+        <circle class="code-splash-node" cx="34" cy="107" r="1.1" />
+        <circle class="code-splash-node red" cx="66" cy="106" r="1.1" />
+        <text class="code-splash-label" x="14" y="68">HVAC CONTROL BUS</text>
+        <text class="code-splash-label" x="68" y="121">ESP32-S3</text>
+        <rect
+          class="code-splash-relay"
+          x="14"
+          y="91"
+          width="12"
+          height="8"
+          rx="1"
+        />
+        <rect
+          class="code-splash-relay"
+          x="30"
+          y="91"
+          width="12"
+          height="8"
+          rx="1"
+        />
+        <rect
+          class="code-splash-relay"
+          x="58"
+          y="91"
+          width="12"
+          height="8"
+          rx="1"
+        />
+        <rect
+          class="code-splash-relay"
+          x="74"
+          y="91"
+          width="12"
+          height="8"
+          rx="1"
+        />
+        <circle class="code-splash-relay-light" cx="17" cy="94" r="1" />
+        <circle class="code-splash-relay-light red" cx="33" cy="94" r="1" />
+        <circle class="code-splash-relay-light" cx="61" cy="94" r="1" />
+        <circle class="code-splash-relay-light red" cx="77" cy="94" r="1" />
+        <path class="code-splash-line" d="M20 99v7M36 99v7M64 99v7M80 99v7" />
+        <path class="code-splash-line" d="M10 48h13l4 4h12M90 48H77l-4 4H60" />
+        <path
+          class="code-splash-line red"
+          d="M10 137h16l5-5h10M90 137H74l-5-5H59"
+        />
+        <path class="code-splash-v blue" d="M39 42L50 62" />
+        <path class="code-splash-v red" d="M61 42L50 62" />
+        <circle class="code-splash-core" cx="50" cy="62" r="2.5" />
+      </svg>
+      <div class="code-splash-brand" aria-hidden="true">
+        <div class="code-splash-brand-name">VEXERA</div>
+        <div class="code-splash-brand-core">CORE</div>
+        <div class="code-splash-tagline">
+          Building Technicians<br />of the Future
+        </div>
+      </div>
+      <div class="splash-attribution">Powered By Alpha &amp; Omega Engine</div>
+    </div>
 
     <div class="header">
       <div class="brand">
@@ -2256,7 +2517,7 @@
 
           let splash = document.getElementById("splash-overlay");
           if (splash) {
-            setTimeout(() => splash.classList.add("photo-transition"), 2300);
+            setTimeout(() => splash.classList.add("code-transition"), 2300);
             setTimeout(() => splash.classList.add("hidden"), 3400);
           }
 
@@ -2276,7 +2537,7 @@
           document.getElementById("ws-status").classList.add("live");
           let splash = document.getElementById("splash-overlay");
           if (splash) {
-            setTimeout(() => splash.classList.add("photo-transition"), 2300);
+            setTimeout(() => splash.classList.add("code-transition"), 2300);
             setTimeout(() => splash.classList.add("hidden"), 3400);
           }
         };
@@ -2324,7 +2585,7 @@
       window.addEventListener("load", initWS);
       window.addEventListener("load", () => {
         const splash = document.getElementById("splash-overlay");
-        setTimeout(() => splash.classList.add("photo-transition"), 2300);
+        setTimeout(() => splash.classList.add("code-transition"), 2300);
         setTimeout(() => splash.classList.add("hidden"), 3400);
         setTimeout(() => {
           splash.style.display = "none";
