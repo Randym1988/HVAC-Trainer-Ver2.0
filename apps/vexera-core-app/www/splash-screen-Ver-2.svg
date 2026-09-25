@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 1376" role="img" aria-labelledby="title desc">
+  <title id="title">Vexera Core layered splash screen</title>
+  <desc id="desc">Editable portrait splash artwork with HVAC circuitry, trainer board, branding, and Alpha and Omega Engine attribution.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#071a2c"/>
+      <stop offset="0.52" stop-color="#102b40"/>
+      <stop offset="1" stop-color="#071321"/>
+    </linearGradient>
+    <linearGradient id="board" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#213e50"/>
+      <stop offset="0.55" stop-color="#102d3f"/>
+      <stop offset="1" stop-color="#071a2b"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#80f7ff"/>
+      <stop offset="1" stop-color="#23b9df"/>
+    </linearGradient>
+    <filter id="glow-cyan" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-small" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="micro-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#65cce8" stroke-opacity=".08" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- Layer 01: base atmosphere -->
+  <g id="layer-background">
+    <rect width="768" height="1376" fill="url(#bg)"/>
+    <rect width="768" height="1376" fill="url(#micro-grid)"/>
+    <ellipse cx="386" cy="430" rx="330" ry="275" fill="#0b78a0" opacity=".1"/>
+    <ellipse cx="380" cy="970" rx="330" ry="290" fill="#020b16" opacity=".3"/>
+  </g>
+
+  <!-- Layer 02: surrounding circuit traces -->
+  <g id="layer-circuit-traces" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#3abfe4" stroke-opacity=".38" stroke-width="2">
+      <path d="M0 126H30l28-28h75l18 18h56l31-31h58l17-17h54"/>
+      <path d="M0 170h43l31-32h62l23 23h56l37-37h89"/>
+      <path d="M768 98h-63l-22 22h-44l-35 35h-62"/>
+      <path d="M768 164h-43l-32 32h-78l-20 20h-80"/>
+      <path d="M0 918h49l31-31h71l25-25h73"/>
+      <path d="M768 886h-54l-28 29h-69l-22 23h-82"/>
+      <path d="M0 1112h86l27-27h66l29-29h64"/>
+      <path d="M768 1086h-74l-22 22h-71l-29 29h-58"/>
+      <path d="M60 1376v-82l34-34v-88"/>
+      <path d="M710 1376v-93l-38-38v-77"/>
+    </g>
+    <g stroke="#ec5c6d" stroke-opacity=".32" stroke-width="2">
+      <path d="M0 276h38l22 22h72l26-26h63"/>
+      <path d="M768 248h-47l-22 22h-76l-24 24h-57"/>
+      <path d="M0 1014h52l26-26h58"/>
+      <path d="M768 1004h-55l-30 30h-73"/>
+    </g>
+    <g fill="#75f4ff" filter="url(#glow-small)">
+      <circle cx="335" cy="68" r="4"/><circle cx="620" cy="143" r="4"/>
+      <circle cx="177" cy="919" r="4"/><circle cx="592" cy="932" r="4"/>
+      <circle cx="210" cy="1260" r="4"/><circle cx="552" cy="1258" r="4"/>
+    </g>
+  </g>
+
+  <!-- Layer 03: upper HVAC control illustration -->
+  <g id="layer-hvac-diagram" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#56d9f1" stroke-opacity=".72" stroke-width="2">
+      <rect x="48" y="164" width="220" height="78" rx="9"/>
+      <path d="M64 186h188M64 210h146M64 226h162"/>
+      <rect x="74" y="184" width="118" height="30" rx="3" stroke-opacity=".4"/>
+      <path d="M87 242v39M197 242v39M87 281H61M197 281h28"/>
+      <rect x="74" y="306" width="154" height="84" rx="7"/>
+      <circle cx="126" cy="348" r="25"/>
+      <path d="M126 324v48M102 348h48M109 331l34 34M143 331l-34 34"/>
+      <path d="M169 326c19 9 20 34 0 44-16-9-16-34 0-44Z"/>
+      <path d="M228 348h60l24-24h70M228 372h76l20 22h78"/>
+      <path d="M382 324v92"/>
+    </g>
+    <g stroke="#ef6675" stroke-opacity=".72" stroke-width="2">
+      <path d="M0 270h34l21 20h35"/><path d="M0 322h54l23-23"/>
+    </g>
+    <g stroke="#56d9f1" stroke-width="1.5" stroke-opacity=".6">
+      <path d="M463 124h82l19 19h102"/>
+      <path d="M500 173h55l24-24h90"/>
+      <circle cx="536" cy="226" r="23"/>
+      <path d="M513 226c8-19 15 19 23 0s15-19 23 0"/>
+      <path d="M559 226h48l18-22h42v74H559"/>
+      <path d="M607 204l21 22-21 22"/>
+      <circle cx="668" cy="226" r="12"/>
+      <path d="M668 214v24M656 226h24"/>
+      <path d="M648 298v37M620 335h58M632 344h34"/>
+      <path d="M718 270c22-11 22 11 44 0M718 286c22-11 22 11 44 0"/>
+    </g>
+    <g fill="#78efff" filter="url(#glow-small)">
+      <circle cx="339" cy="285" r="6"/><circle cx="383" cy="326" r="4"/><circle cx="687" cy="335" r="4"/>
+    </g>
+    <text x="510" y="112" fill="#63dff5" font-family="Arial,sans-serif" font-size="17" letter-spacing="1">Heat pump</text>
+  </g>
+
+  <!-- Layer 04: trainer board -->
+  <g id="layer-trainer-board">
+    <path d="M-42 544L635 420l190 176-679 198Z" fill="#020b14" opacity=".55"/>
+    <path d="M-10 523L625 408l173 161-641 176Z" fill="url(#board)" stroke="#58d6ed" stroke-opacity=".56" stroke-width="2"/>
+    <path d="M14 545L619 436l139 130-604 153Z" fill="none" stroke="#67e4f4" stroke-opacity=".28" stroke-width="2"/>
+    <path d="M19 741L612 599M38 758L632 616" stroke="#1b91b2" stroke-opacity=".52" stroke-width="2"/>
+    <text x="352" y="513" fill="#d7f5fa" opacity=".75" font-family="Arial,sans-serif" font-size="14" transform="rotate(-11 352 513)" text-anchor="middle">HEAT PUMP</text>
+    <text x="352" y="532" fill="#9fd4df" opacity=".7" font-family="Arial,sans-serif" font-size="9" transform="rotate(-11 352 532)" text-anchor="middle">TRAINER CONTROL BOARD</text>
+  </g>
+
+  <!-- Layer 05: editable relays and status LEDs -->
+  <g id="layer-relays">
+    <g fill="#123044" stroke="#76d9e9" stroke-opacity=".48" stroke-width="1.5">
+      <rect x="412" y="548" width="70" height="52" rx="5" transform="rotate(-11 412 548)"/>
+      <rect x="500" y="532" width="70" height="52" rx="5" transform="rotate(-11 500 532)"/>
+      <rect x="582" y="516" width="70" height="52" rx="5" transform="rotate(-11 582 516)"/>
+      <rect x="458" y="636" width="70" height="52" rx="5" transform="rotate(-11 458 636)"/>
+      <rect x="548" y="620" width="70" height="52" rx="5" transform="rotate(-11 548 620)"/>
+    </g>
+    <g fill="#d5fbff" opacity=".54" font-family="Arial,sans-serif" font-size="8">
+      <text x="427" y="578" transform="rotate(-11 427 578)">RELAY 01</text>
+      <text x="515" y="562" transform="rotate(-11 515 562)">RELAY 02</text>
+      <text x="597" y="546" transform="rotate(-11 597 546)">RELAY 03</text>
+      <text x="473" y="666" transform="rotate(-11 473 666)">RELAY 04</text>
+      <text x="563" y="650" transform="rotate(-11 563 650)">RELAY 05</text>
+    </g>
+    <g filter="url(#glow-small)">
+      <circle cx="448" cy="558" r="6" fill="#45f1ff"><animate attributeName="opacity" values=".35;1;.35" dur="1.5s" repeatCount="indefinite"/></circle>
+      <circle cx="536" cy="542" r="6" fill="#ff6675"><animate attributeName="opacity" values=".3;1;.3" dur="2s" repeatCount="indefinite"/></circle>
+      <circle cx="618" cy="526" r="6" fill="#45f1ff"><animate attributeName="opacity" values=".35;1;.35" dur="1.7s" repeatCount="indefinite"/></circle>
+      <circle cx="484" cy="646" r="6" fill="#45f1ff"><animate attributeName="opacity" values=".35;1;.35" dur="1.3s" repeatCount="indefinite"/></circle>
+      <circle cx="574" cy="630" r="6" fill="#ff6675"><animate attributeName="opacity" values=".3;1;.3" dur="2.2s" repeatCount="indefinite"/></circle>
+    </g>
+  </g>
+
+  <!-- Layer 06: editable Vexera branding -->
+  <g id="layer-branding" text-anchor="middle">
+    <g id="layer-vexera-mark" transform="translate(384 697)">
+      <path d="M-37-45L0 21" fill="none" stroke="#54eaff" stroke-width="10" stroke-linecap="round" filter="url(#glow-cyan)"/>
+      <path d="M37-45L0 21" fill="none" stroke="#f46172" stroke-width="10" stroke-linecap="round" filter="url(#glow-cyan)"/>
+      <circle cx="0" cy="21" r="7" fill="#f5ffff" filter="url(#glow-cyan)"/>
+    </g>
+    <text x="384" y="815" fill="#f7fdff" font-family="Arial,sans-serif" font-size="74" font-weight="900" letter-spacing="5">VEXERA</text>
+    <text x="384" y="878" fill="url(#cyan)" font-family="Arial,sans-serif" font-size="61" font-weight="800" letter-spacing="9">CORE</text>
+    <text x="384" y="956" fill="#ffffff" font-family="Arial,sans-serif" font-size="31" font-weight="700" letter-spacing="1.5">Building Technicians</text>
+    <text x="384" y="1000" fill="#ffffff" font-family="Arial,sans-serif" font-size="31" font-weight="700" letter-spacing="1.5">of the Future</text>
+  </g>
+
+  <!-- Layer 07: attribution -->
+  <g id="layer-attribution" text-anchor="middle">
+    <circle cx="384" cy="1130" r="52" fill="none" stroke="#6df3ff" stroke-opacity=".75" stroke-width="5" stroke-dasharray="150 180" filter="url(#glow-cyan)">
+      <animateTransform attributeName="transform" type="rotate" from="0 384 1130" to="360 384 1130" dur="8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="384" cy="1130" r="23" fill="#123f54" stroke="#6df3ff" stroke-width="3"/>
+    <path d="M369 1113l15 28 15-28M384 1141v-22" fill="none" stroke="#eaffff" stroke-width="3" stroke-linecap="round"/>
+    <text x="384" y="1258" fill="#d6dce0" font-family="Georgia,serif" font-size="23">Powered by</text>
+    <text x="384" y="1294" fill="#f0f3f4" font-family="Georgia,serif" font-size="25" letter-spacing="2">ALPHA &amp; OMEGA</text>
+    <text x="384" y="1325" fill="#d6dce0" font-family="Georgia,serif" font-size="20" letter-spacing="5">ENGINE</text>
+  </g>
+
+  <!-- Layer 08: presentation transition -->
+  <g id="layer-transition">
+    <rect width="768" height="1376" fill="#02070d" opacity="0">
+      <animate attributeName="opacity" begin="3s" dur=".9s" to="1" fill="freeze"/>
+    </rect>
+  </g>
+</svg>
