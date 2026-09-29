@@ -2015,10 +2015,14 @@
           }
         }
 
-        fetch(
-          `${getApiBaseUrl()}/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${type}`,
-          { credentials: "include" },
-        )
+        fetch(`${getApiBaseUrl()}/api/login`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          },
+          body: new URLSearchParams({ user: u, pass: p, type }),
+        })
           .then((r) => {
             if (r.ok) {
               document.getElementById("login-overlay").style.display = "none";

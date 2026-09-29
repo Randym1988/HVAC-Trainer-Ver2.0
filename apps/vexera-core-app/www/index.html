@@ -1737,6 +1737,11 @@
         return `${protocol}://${getTargetHost()}`;
       }
 
+      function getApiAuthHeaders() {
+        const token = sessionStorage.getItem("hvac_api_token");
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      }
+
       function getWsUrl() {
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         return `${wsProtocol}://${getTargetHost()}/ws`;
@@ -1755,6 +1760,14 @@
       }
 
       function logoutUser() {
+        const token = sessionStorage.getItem("hvac_api_token");
+        if (token) {
+          fetch(`${getApiBaseUrl()}/api/logout`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        }
+        sessionStorage.removeItem("hvac_api_token");
         document.cookie =
           "vexera_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
         window.location.href = "/student";
@@ -2079,7 +2092,7 @@
 
         fetch(
           `${getApiBaseUrl()}/api/submit?diagnosis=${encodeURIComponent(a)}`,
-          { method: "POST" },
+          { method: "POST", headers: getApiAuthHeaders() },
         )
           .then((r) => r.text())
           .then((text) => {
@@ -2179,10 +2192,17 @@
       function attemptLogin(type) {
         let u = document.getElementById("login_user").value.trim();
         let p = document.getElementById("login_pass").value.trim();
-        fetch(
-          `${getApiBaseUrl()}/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${type}`,
-        ).then((r) => {
+        fetch(`${getApiBaseUrl()}/api/login`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          },
+          body: new URLSearchParams({ user: u, pass: p, type }),
+        }).then(async (r) => {
           if (r.ok) {
+            const result = await r.json();
+            if (result.token)
+              sessionStorage.setItem("hvac_api_token", result.token);
             document.cookie = "vexera_auth=student; path=/";
             document.getElementById("login-overlay").style.display = "none";
           } else document.getElementById("login_error").style.display = "block";

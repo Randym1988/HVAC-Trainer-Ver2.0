@@ -168,7 +168,10 @@ String ble_login_status = "None"; // Tracks BLE login result ("success", "denied
 String wifi_ssid = "ComfortSC";
 String wifi_pass = "8037945526";
 String authToken = "";
+const char* OTA_AUTH_USERNAME = "trainer";
+const char* OTA_AUTH_PASSWORD = "Mitchell2019!";
 String authRole = "";
+String bleAuthenticatedPeer = "";
 uint32_t authExpiry = 0;
 const uint32_t AUTH_TOKEN_TTL = 28800;
 uint32_t wifi_reconnect_timer = 0;
@@ -428,6 +431,35 @@ void loadWiFiConfig() {
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws"); 
+bool hasValidTrainerSession(AsyncWebServerRequest *request) {
+  if (!authToken.length() || static_cast<int32_t>(authExpiry - millis()) <= 0) {
+    authToken = "";
+    authRole = "";
+    return false;
+  }
+  const AsyncWebHeader *authorization = request->getHeader("Authorization");
+  if (!authorization) return false;
+  String value = authorization->value();
+  return value.startsWith("Bearer ") && value.substring(7) == authToken;
+}
+
+bool requireTrainerSession(AsyncWebServerRequest *request, bool instructorOnly = true) {
+  if (!hasValidTrainerSession(request)) {
+    request->send(401, "text/plain", "Authentication required");
+    return false;
+  }
+  if (instructorOnly && authRole != "admin" && authRole != "instructor") {
+    request->send(403, "text/plain", "Instructor role required");
+    return false;
+  }
+  return true;
+}
+
+bool authenticateOtaRequest(AsyncWebServerRequest *request) {
+  if (request->authenticate(OTA_AUTH_USERNAME, OTA_AUTH_PASSWORD)) return true;
+  request->requestAuthentication(AsyncAuthType::AUTH_DIGEST, "Trainer OTA");
+  return false;
+}
 
 bool readDebounced(int pin, bool &stable_state, uint32_t &timer) {
   bool raw_state = !digitalRead(pin); 
@@ -567,10 +599,6 @@ String getStatusJSON() {
     doc["relay_heat_blower"] = furnace_controller.isHeatBlowerOn() ? 1 : 0;
     doc["furnace_state"] = furnace_controller.getFurnaceState();
   }
-  if (ble_login_status == "success" && authToken.length() > 0) {
-    doc["auth_token"] = authToken;
-  }
-
   // Export full fault/simulation bitfields so external instructor UIs can mirror every toggle state.
   for (int faultIdx = 1; faultIdx < 55; faultIdx++) {
     char key[8];
@@ -696,8 +724,10 @@ String getUserRole(String user) {
 String generateAuthToken() {
   uint32_t valueA = esp_random();
   uint32_t valueB = esp_random();
-  char buf[24];
-  snprintf(buf, sizeof(buf), "%08X%08X", valueA, valueB);
+  uint32_t valueC = esp_random();
+  uint32_t valueD = esp_random();
+  char buf[33];
+  snprintf(buf, sizeof(buf), "%08X%08X%08X%08X", valueA, valueB, valueC, valueD);
   return String(buf);
 }
 
@@ -731,6 +761,37 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
       DeserializationError error = deserializeJson(doc, rxValue.c_str());
 
       if (!error) {
+        const String peerAddress(connInfo.getAddress().toString().c_str());
+        if (!doc["user"].isNull() && !doc["pass"].isNull()) {
+          String user = doc["user"].as<String>();
+          String pass = doc["pass"].as<String>();
+          user.toLowerCase();
+          if (checkCredentials(user, pass)) {
+            authToken = generateAuthToken();
+            authRole = getUserRole(user);
+            authExpiry = millis() + AUTH_TOKEN_TTL * 1000UL;
+            bleAuthenticatedPeer = peerAddress;
+            ble_login_status = "success";
+            logLogin(user, authRole);
+          } else {
+            bleAuthenticatedPeer = "";
+            ble_login_status = "denied";
+          }
+          force_telemetry_update = true;
+        }
+
+        const bool bleSessionValid = authToken.length() &&
+            static_cast<int32_t>(authExpiry - millis()) > 0 &&
+            peerAddress == bleAuthenticatedPeer &&
+            (authRole == "admin" || authRole == "instructor" || authRole == "student");
+        if (!bleSessionValid) {
+          if (!doc["diagnosis"].isNull()) {
+            forwardDiagnosisToEngine(doc["diagnosis"].as<String>());
+          }
+          force_telemetry_update = true;
+          return;
+        }
+
         if (!doc["force_defrost"].isNull()) {
           force_defrost = doc["force_defrost"].as<bool>();
           Serial.printf("Set force_defrost: %d\n", force_defrost);
@@ -745,25 +806,6 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
           String submitted = doc["diagnosis"].as<String>();
           Serial.printf("Submitting Diagnosis over BLE: %s\n", submitted.c_str());
           forwardDiagnosisToEngine(submitted);
-        }
-        
-        // --- NEW: BLE USER LOGIN CHECK ---
-        if (!doc["user"].isNull() && !doc["pass"].isNull()) {
-          String u = doc["user"].as<String>();
-          String p = doc["pass"].as<String>();
-          Serial.printf("Checking BLE Login Credentials for user: %s\n", u.c_str());
-          if (checkCredentials(u, p)) {
-            authToken = generateAuthToken();
-            authRole = getUserRole(u);
-            authExpiry = (millis() / 1000) + AUTH_TOKEN_TTL;
-            ble_login_status = "success";
-            logLogin(u, authRole);
-            Serial.printf("BLE Authentication SUCCESS! role=%s\n", authRole.c_str());
-          } else {
-            ble_login_status = "denied";
-            Serial.println("BLE Authentication DENIED!");
-          }
-          force_telemetry_update = true;
         }
         
         force_telemetry_update = true;
@@ -1024,7 +1066,7 @@ void setup() {
   
   ArduinoOTA.setHostname(OTA_HOSTNAME.c_str());
   ArduinoOTA.setPort(3232);
-  ArduinoOTA.setPassword("Mitchell2019!");
+  ArduinoOTA.setPassword(OTA_AUTH_PASSWORD);
   Serial.printf("Arduino OTA hostname: %s.local\n", OTA_HOSTNAME.c_str());
   ArduinoOTA.onStart([]() {
     ota_in_progress = true;
@@ -1115,6 +1157,7 @@ void setup() {
 
 
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!authenticateOtaRequest(request)) return;
     request->send(200, "text/html", 
       "<form method='POST' action='/update' enctype='multipart/form-data'>"
       "<input type='file' name='update'>"
@@ -1122,6 +1165,7 @@ void setup() {
       "</form>");
   });
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!authenticateOtaRequest(request)) return;
     AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
     response->addHeader("Connection", "close");
     request->send(response);
@@ -1130,6 +1174,7 @@ void setup() {
         ESP.restart();
     }
   }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+    if (!authenticateOtaRequest(request)) return;
     if (!index) {
       ota_in_progress = true;
       setStatusLeds(status_led.Color(0, 0, 255), true, 255);
@@ -1177,6 +1222,7 @@ void setup() {
 
   server.on("/api/users/add", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
   [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+    if (!requireTrainerSession(request)) return;
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, data, len);
     if (!error && !doc["user"].isNull() && !doc["pass"].isNull()) {
@@ -1199,19 +1245,28 @@ void setup() {
     request->send(response);
   });
 
-  server.on("/api/login", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (request->hasParam("user") && request->hasParam("pass")) {
-      String user = request->getParam("user")->value();
-      String pass = request->getParam("pass")->value();
-      user.toLowerCase();
-      File f = LittleFS.open("/users.json", FILE_READ);
-      JsonDocument db; DeserializationError error = deserializeJson(db, f); f.close();
-      if (!error && !db[user].isNull() && db[user]["pw"].as<String>().equalsIgnoreCase(pass)) {
-        String role = db[user]["role"].as<String>();
-        logLogin(user, role); 
-        request->send(200, "text/plain", role);
-      } else { request->send(401, "text/plain", "DENIED"); }
-    } else { request->send(400, "text/plain", "Bad Request"); }
+  server.on("/api/login", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("user", true) || !request->hasParam("pass", true)) {
+      request->send(400, "text/plain", "Bad Request");
+      return;
+    }
+    String user = request->getParam("user", true)->value();
+    String pass = request->getParam("pass", true)->value();
+    user.toLowerCase();
+    if (!checkCredentials(user, pass)) {
+      request->send(401, "text/plain", "DENIED");
+      return;
+    }
+    authRole = getUserRole(user);
+    if (authRole != "admin" && authRole != "instructor" && authRole != "student") {
+      authRole = "student";
+    }
+    authToken = generateAuthToken();
+    authExpiry = millis() + AUTH_TOKEN_TTL * 1000UL;
+    ble_login_status = "success";
+    logLogin(user, authRole);
+    String payload = "{\"role\":\"" + authRole + "\",\"token\":\"" + authToken + "\"}";
+    request->send(200, "application/json", payload);
   });
 
   server.on("/wifi-setup", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1227,6 +1282,7 @@ void setup() {
   });
 
   server.on("/wifi-save", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!requireTrainerSession(request)) return;
     if(request->hasParam("ssid", true) && request->hasParam("pass", true)) {
       JsonDocument doc;
       doc["ssid"] = request->getParam("ssid", true)->value();
@@ -1256,6 +1312,7 @@ void setup() {
   });
 
   server.on("/access.log", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!requireTrainerSession(request)) return;
     if (LittleFS.exists("/access.log")) { request->send(LittleFS, "/access.log", "text/plain"); } 
     else { request->send(404, "text/plain", "Log file is empty."); }
   });
@@ -1520,10 +1577,33 @@ void setup() {
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){ 
     request->send(200, "application/json", getStatusJSON()); 
   });
+
+  server.on("/api/logout", HTTP_POST, [](AsyncWebServerRequest *request){
+    authToken = "";
+    authRole = "";
+    authExpiry = 0;
+    ble_login_status = "None";
+    request->send(200, "text/plain", "OK");
+  });
   
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "*");
+
+  server.addMiddleware([](AsyncWebServerRequest *request, ArMiddlewareNext next){
+    const String path = request->url();
+    if (!path.startsWith("/api/") || request->method() == HTTP_OPTIONS || path == "/api/login") {
+      next();
+      return;
+    }
+    if (request->method() == HTTP_GET &&
+        (path == "/api/status" || path == "/api/identity" || path == "/api/engine" || path == "/api/led/status")) {
+      next();
+      return;
+    }
+    const bool studentAllowed = path == "/api/submit" || path == "/api/logout";
+    if (requireTrainerSession(request, !studentAllowed)) next();
+  });
 
   server.begin();
 

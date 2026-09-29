@@ -110,11 +110,7 @@ function Invoke-EspotaUpload {
     return
   }
 
-  Write-Host "Attempt 2: OTA without password fallback"
-  & pio pkg exec -p tool-espotapy -- espota.py -i $Endpoint @hostArgs -p 3232 -f $BinPath -r
-  if ($LASTEXITCODE -ne 0) {
-    throw "OTA upload failed after password and no-password attempts."
-  }
+  throw "Authenticated ESP OTA upload failed; trying authenticated HTTP OTA fallback."
 }
 
 function Invoke-HttpOtaUpload {
@@ -131,7 +127,7 @@ function Invoke-HttpOtaUpload {
   if (-not [string]::IsNullOrWhiteSpace($BindIp)) {
     $curlArgs += @("--interface", $BindIp)
   }
-  $curlArgs += @("-F", "update=@$BinPath;type=application/octet-stream", "http://$Endpoint/update")
+  $curlArgs += @("--digest", "--user", "trainer:Mitchell2019!", "-F", "update=@$BinPath;type=application/octet-stream", "http://$Endpoint/update")
   $oldEap = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   $httpBody = & curl.exe @curlArgs 2>&1

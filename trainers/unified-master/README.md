@@ -84,3 +84,10 @@ Notes:
 - Mode-specific control engine selected at startup from GPIO14.
   - `HEAT_PUMP`: existing heat pump simulation/control logic.
   - `STRAIGHT_AC_FURNACE`: furnace controller + physics engine, including gas valve and blower monitor inputs via optocouplers.
+
+## API Access
+
+- Sign in with `POST /api/login` using form fields `user` and `pass`; credentials are no longer accepted in the URL.
+- The response includes a short-lived bearer token. Send it as `Authorization: Bearer <token>` for trainer API writes.
+- Status, identity, and engine discovery reads remain public. Trainer controls and user management require an instructor role; diagnosis submission remains available to student and guest training flows.
+- Browser firmware updates require HTTP Digest authentication. The OTA password is still shared by the firmware and update script, so use the trainer only on a trusted network until that credential is moved to per-device provisioning.

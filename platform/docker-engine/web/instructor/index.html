@@ -4887,14 +4887,21 @@
       function attemptLogin(type) {
         const u = document.getElementById("login_user").value.trim();
         const p = document.getElementById("login_pass").value.trim();
-        const loginUrl = `/api/login?user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}&type=${encodeURIComponent(type)}`;
+        const loginBody = new URLSearchParams({ user: u, pass: p, type });
         console.log(
           "[attemptLogin] Attempting login for user:",
           u,
           "type:",
           type,
         );
-        fetch(loginUrl, { credentials: "include" })
+        fetch("/api/login", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          },
+          body: loginBody,
+        })
           .then((res) => {
             console.log("[attemptLogin] Server response status:", res.status);
             if (res.ok) {
