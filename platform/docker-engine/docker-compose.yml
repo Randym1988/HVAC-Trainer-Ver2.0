@@ -11,19 +11,31 @@ services:
     volumes:
       - ./backend/data:/data
     depends_on:
-      - mqtt
+      mqtt:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   frontend:
-    build: 
+    build:
       context: .
       dockerfile: frontend/Dockerfile
     ports:
       - "8080:80"
     depends_on:
-      - engine
+      engine:
+        condition: service_healthy
     restart: unless-stopped
-  
+
   # MQTT broker for trainer communication
   mqtt:
     image: eclipse-mosquitto:2
@@ -34,4 +46,20 @@ services:
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
+    healthcheck:
+      test:
+        - CMD
+        - mosquitto_sub
+        - -h
+        - 127.0.0.1
+        - -t
+        - "$$SYS/broker/version"
+        - -C
+        - "1"
+        - -W
+        - "5"
+      interval: 15s
+      timeout: 7s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped

@@ -8,6 +8,7 @@ import hmac
 import hashlib
 import secrets
 import re
+import tempfile
 from contextlib import suppress
 from fastapi import (
     FastAPI,
@@ -40,6 +41,7 @@ app.add_middleware(
 active_websockets = []
 # Global MQTT client placeholder (used for publishing from REST endpoints)
 mqtt_client: Optional[MQTTClient] = None
+simulation_task: Optional[asyncio.Task] = None
 mqtt_task: Optional[asyncio.Task] = None
 MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
 EDGE_REQUIRED = os.getenv("EDGE_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
@@ -92,6 +94,34 @@ def verify_password(submitted: str, record: Dict[str, str]) -> bool:
     return hmac.compare_digest(submitted, legacy_pw)
 
 
+def write_json_atomically(file_path: str, data: Any) -> None:
+    directory = os.path.dirname(os.path.abspath(file_path))
+    filename = os.path.basename(file_path)
+    os.makedirs(directory, exist_ok=True)
+    temporary_path: Optional[str] = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=directory,
+            prefix=f".{filename}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = temporary_file.name
+            json.dump(data, temporary_file, indent=2)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+
+        os.replace(temporary_path, file_path)
+    except Exception:
+        if temporary_path is not None:
+            with suppress(OSError):
+                os.unlink(temporary_path)
+        raise
+
+
 def load_users_db() -> Dict[str, Dict[str, str]]:
     defaults: Dict[str, Dict[str, str]] = {
         "admin": {"pw": "admin", "role": "instructor"},
@@ -99,29 +129,30 @@ def load_users_db() -> Dict[str, Dict[str, str]]:
     }
 
     if not os.path.exists(USERS_DB_FILE):
-        with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(defaults, f, indent=2)
+        write_json_atomically(USERS_DB_FILE, defaults)
         return defaults
 
     try:
         with open(USERS_DB_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
-        if isinstance(loaded, dict):
-            for username, meta in defaults.items():
-                if username not in loaded:
-                    loaded[username] = meta
-            return loaded
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Unable to load users database {USERS_DB_FILE!r}; original file was preserved"
+        ) from exc
 
-    with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(defaults, f, indent=2)
-    return defaults
+    if not isinstance(loaded, dict):
+        raise RuntimeError(
+            f"Users database {USERS_DB_FILE!r} must contain a JSON object"
+        )
+
+    for username, meta in defaults.items():
+        if username not in loaded:
+            loaded[username] = meta
+    return loaded
 
 
 def save_users_db() -> None:
-    with open(USERS_DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(users_db, f, indent=2)
+    write_json_atomically(USERS_DB_FILE, users_db)
 
 
 def get_session_role(request: Request) -> str | None:
@@ -166,7 +197,7 @@ def load_edges_db() -> Dict[str, Dict[str, Any]]:
         with open(EDGES_DB_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
         if not isinstance(loaded, dict):
-            return {}
+            raise ValueError("database root must be a JSON object")
 
         restored: Dict[str, Dict[str, Any]] = {}
         for edge_id, edge in loaded.items():
@@ -210,8 +241,10 @@ def load_edges_db() -> Dict[str, Dict[str, Any]]:
                 "runtime": {},
             }
         return restored
-    except Exception:
-        return {}
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Unable to load edges database {EDGES_DB_FILE!r}; original file was preserved"
+        ) from exc
 
 
 def save_edges_db(force: bool = False) -> None:
@@ -245,12 +278,8 @@ def save_edges_db(force: bool = False) -> None:
             ),
         }
 
-    try:
-        with open(EDGES_DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, indent=2)
-        _last_edges_save_at = now
-    except Exception:
-        pass
+    write_json_atomically(EDGES_DB_FILE, serializable)
+    _last_edges_save_at = now
 
 
 def resolve_host_ip() -> str:
@@ -1150,24 +1179,33 @@ async def simulation_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    global mqtt_task
+    global simulation_task, mqtt_task
     state.edges = load_edges_db()
     if state.edges:
         state.selected_edge_id = sorted(state.edges.keys(), key=lambda k: k.lower())[0]
         sync_selected_edge_into_state()
     with suppress(Exception):
         await asyncio.to_thread(start_mdns_advertisement)
-    asyncio.create_task(simulation_loop())
+    simulation_task = asyncio.create_task(simulation_loop())
     mqtt_task = asyncio.create_task(mqtt_command_listener())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global mqtt_task, mqtt_client
-    if mqtt_task is not None:
-        mqtt_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await mqtt_task
+    global simulation_task, mqtt_task, mqtt_client
+    background_tasks = [
+        task for task in (simulation_task, mqtt_task) if task is not None
+    ]
+    for task in background_tasks:
+        task.cancel()
+    if background_tasks:
+        results = await asyncio.gather(*background_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception) and not isinstance(
+                result, asyncio.CancelledError
+            ):
+                print(f"[Lifecycle] Background task failed during shutdown: {result}")
+    simulation_task = None
     mqtt_task = None
     mqtt_client = None
     stop_mdns_advertisement()
