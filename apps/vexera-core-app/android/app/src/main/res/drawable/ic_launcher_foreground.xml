@@ -8,15 +8,15 @@
     <!-- Original points were roughly 25-82. Scaled to be slightly larger and centered. -->
     <path
         android:pathData="M30,35 L54,80"
-        android:strokeColor="#0ea5e9"
+        android:strokeColor="#23b9df"
         android:strokeWidth="8"
         android:strokeLineCap="round"/>
     <path
         android:pathData="M78,35 L54,80"
-        android:strokeColor="#ef4444"
+        android:strokeColor="#ef6675"
         android:strokeWidth="8"
         android:strokeLineCap="round"/>
     <path
-        android:fillColor="#FFFFFF"
+        android:fillColor="#effcff"
         android:pathData="M50,80a4,4 0,1 0,8 0a4,4 0,1 0,-8 0"/>
 </vector>

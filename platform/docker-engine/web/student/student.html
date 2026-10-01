@@ -44,10 +44,10 @@
       /* --- VEXERA SPLASH SCREEN --- */
       #splash-overlay {
         position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
         background: #050b14;
         display: flex;
         flex-direction: column;
@@ -58,87 +58,73 @@
           opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1),
           visibility 0.8s;
       }
-      .splash-v-logo {
-        width: 120px;
-        height: 120px;
-        margin-bottom: 20px;
-      }
-      .v-svg-splash {
-        width: 100%;
-        height: 100%;
-        filter: drop-shadow(0 0 20px rgba(14, 165, 233, 0.5));
-      }
-      .v-left-s {
-        fill: none;
-        stroke: #0ea5e9;
-        stroke-width: 8;
-        stroke-linecap: round;
-        stroke-dasharray: 100;
-        animation: drawS 2s ease-in-out infinite alternate;
-      }
-      .v-right-s {
-        fill: none;
-        stroke: #ef4444;
-        stroke-width: 8;
-        stroke-linecap: round;
-        stroke-dasharray: 100;
-        animation: drawS 2s ease-in-out infinite alternate-reverse;
-      }
-      .v-core-s {
-        fill: white;
-        filter: drop-shadow(0 0 10px white);
-        animation: pulseS 1.5s infinite;
-      }
-      @keyframes drawS {
-        from {
-          stroke-dashoffset: 100;
-        }
-        to {
-          stroke-dashoffset: 0;
-        }
-      }
-      @keyframes pulseS {
-        0%,
-        100% {
-          transform: scale(1);
-          opacity: 1;
-        }
-        50% {
-          transform: scale(1.4);
-          opacity: 0.7;
-        }
-      }
-      .splash-text {
-        font-size: 14px;
-        font-weight: 800;
-        letter-spacing: 4px;
-        color: white;
-        text-transform: uppercase;
-        margin-top: 10px;
-        opacity: 0.6;
-        animation: breath 2s infinite ease-in-out;
-      }
-      .splash-attribution {
-        position: absolute;
-        bottom: 28px;
-        color: rgba(255, 255, 255, 0.42);
-        font-size: 9px;
-        font-weight: 600;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-      }
-      @keyframes breath {
-        0%,
-        100% {
-          opacity: 0.3;
-        }
-        50% {
-          opacity: 0.8;
-        }
-      }
       #splash-overlay.hidden {
         opacity: 0;
         visibility: hidden;
+      }
+      #splash-overlay {
+        background: #071321;
+        overflow: hidden;
+      }
+      .splash-cover {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        object-fit: fill;
+        filter: brightness(1.12) saturate(1.22) contrast(1.04);
+        animation: splash-power-on 1.2s ease-out both;
+      }
+      @keyframes splash-power-on {
+        from {
+          filter: brightness(0.68) saturate(0.9);
+        }
+        to {
+          filter: brightness(1.12) saturate(1.22) contrast(1.04);
+        }
+      }
+      body.login-mode {
+        overflow: hidden;
+        padding-top: 0;
+      }
+      body.login-mode #login-overlay {
+        align-items: flex-start !important;
+        background: #071321 url("/assets/splash-screen-new.svg") 0 0 / 100% 100%
+          no-repeat !important;
+        overflow-y: auto;
+        padding: min(39vh, 350px) 18px 24px;
+      }
+      body.login-mode #login-overlay > .card {
+        max-width: 380px !important;
+        margin: 0 auto;
+        padding: 22px !important;
+        background: #09090b;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+      @media (max-width: 600px) {
+        body.login-mode #login-overlay {
+          padding-top: min(30vh, 280px);
+        }
+      }
+      .brand-mark {
+        position: relative;
+        display: block;
+        flex: 0 0 auto;
+        width: 54px;
+        height: 62px;
+        overflow: hidden;
+      }
+      .brand-mark img {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 142.75%;
+        max-width: none;
+        height: auto;
+        transform: translateX(-14.94%);
       }
 
       :root {
@@ -710,7 +696,7 @@
       }
     </style>
   </head>
-  <body>
+  <body class="login-mode">
     <div id="pull-indicator">
       <div class="refresh-circle">
         <svg
@@ -752,31 +738,6 @@
           box-shadow: 0 0 40px rgba(16, 185, 129, 0.15);
         "
       >
-        <svg
-          viewBox="0 0 100 100"
-          style="
-            width: 60px;
-            height: 60px;
-            margin-bottom: 15px;
-            filter: drop-shadow(0 0 15px rgba(14, 165, 233, 0.4));
-          "
-        >
-          <path
-            d="M10 15 L50 90"
-            fill="none"
-            stroke="#0ea5e9"
-            stroke-width="8"
-            stroke-linecap="round"
-          />
-          <path
-            d="M90 15 L50 90"
-            fill="none"
-            stroke="#ef4444"
-            stroke-width="8"
-            stroke-linecap="round"
-          />
-          <circle cx="50" cy="90" r="6" fill="white" />
-        </svg>
         <h2 style="margin-top: 0; color: white; font-size: 24px">
           Student Portal
         </h2>
@@ -887,37 +848,15 @@
         </div>
       </div>
     </div>
-    <div id="splash-overlay">
-      <div class="splash-v-logo">
-        <svg class="v-svg-splash" viewBox="0 0 100 100">
-          <path class="v-left-s" d="M10 15 L50 90" />
-          <path class="v-right-s" d="M90 15 L50 90" />
-          <circle class="v-core-s" cx="50" cy="90" r="6" />
-        </svg>
-      </div>
-      <div class="splash-text">Vexera Core</div>
-      <div class="splash-attribution">Powered By Alpha &amp; Omega Engine</div>
+    <div id="splash-overlay" aria-label="Vexera Core splash screen">
+      <img class="splash-cover" src="/assets/splash-screen-new.svg" alt="" />
     </div>
 
     <div class="header">
       <div class="brand">
-        <svg viewBox="0 0 100 100" style="width: 26px; height: 26px">
-          <path
-            d="M10 15 L50 90"
-            fill="none"
-            stroke="#0ea5e9"
-            stroke-width="8"
-            stroke-linecap="round"
-          />
-          <path
-            d="M90 15 L50 90"
-            fill="none"
-            stroke="#ef4444"
-            stroke-width="8"
-            stroke-linecap="round"
-          />
-          <circle cx="50" cy="90" r="6" fill="white" />
-        </svg>
+        <span class="brand-mark" aria-hidden="true"
+          ><img src="/assets/splash-screen-new.svg" alt=""
+        /></span>
         Vexera Core
       </div>
       <div style="display: flex; gap: 15px; align-items: center">
@@ -1683,6 +1622,7 @@
         // Handle BLE login feedback
         if (data.ble_login_status) {
           if (data.ble_login_status === "success") {
+            document.body.classList.remove("login-mode");
             document.getElementById("login-overlay").style.display = "none";
             const navDock = document.querySelector(".nav-dock");
             if (navDock) navDock.style.display = "flex";
@@ -2357,8 +2297,6 @@
 
         ws.onopen = () => {
           document.getElementById("ws-status").classList.add("live");
-          let splash = document.getElementById("splash-overlay");
-          if (splash) splash.classList.add("hidden");
         };
 
         ws.onclose = () => {
@@ -2383,9 +2321,11 @@
           fetch("/api/auth/check", { credentials: "include" })
             .then((res) => {
               if (!res.ok) throw new Error("unauthenticated");
+              document.body.classList.remove("login-mode");
               document.getElementById("login-overlay").style.display = "none";
             })
             .catch(() => {
+              document.body.classList.add("login-mode");
               const navDock = document.querySelector(".nav-dock");
               if (navDock) navDock.style.display = "none";
               document.getElementById("login-overlay").style.display = "flex";
@@ -2414,9 +2354,10 @@
             );
           });
 
-        setTimeout(() => {
-          document.getElementById("splash-overlay").style.display = "none";
-        }, 1500);
+        const splash = document.getElementById("splash-overlay");
+        setTimeout(() => splash.classList.add("code-transition"), 1700);
+        setTimeout(() => splash.classList.add("hidden"), 2400);
+        setTimeout(() => (splash.style.display = "none"), 3000);
         document
           .getElementById("refrigerant_type")
           .addEventListener("change", (e) => {
