@@ -1,0 +1,113 @@
+name: Platform CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/docker-engine/backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: platform/docker-engine/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run backend tests
+        run: python -m unittest discover -s . -p "test*.py" -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose -f platform/docker-engine/docker-compose.yml config --quiet
+
+      - name: Build Docker services
+        run: docker compose -f platform/docker-engine/docker-compose.yml build
+
+      - name: Start Docker services
+        run: docker compose -f platform/docker-engine/docker-compose.yml up -d --wait
+
+      - name: Smoke-test engine, portals, and instructor assets
+        run: |
+          curl --fail --retry 5 --retry-connrefused http://localhost:8000/api/status
+          curl --fail --retry 5 --retry-connrefused http://localhost:8080/instructor --output /dev/null
+          curl --fail --retry 5 --retry-connrefused http://localhost:8080/student --output /dev/null
+          curl --fail --retry 5 --retry-connrefused http://localhost:8080/assets/alpha-omega-mark.png --output /dev/null
+          curl --fail --retry 5 --retry-connrefused http://localhost:8080/assets/splash-screen-instructor-v2.png --output /dev/null
+
+      - name: Stop Docker services
+        if: always()
+        run: docker compose -f platform/docker-engine/docker-compose.yml down
+
+  firmware-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: trainers/unified-master/firmware
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --disable-pip-version-check platformio
+
+      - name: Build unified trainer firmware
+        run: pio run -e usb
+
+  android-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/vexera-core-app/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: apps/vexera-core-app/android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Install mobile dependencies
+        working-directory: apps/vexera-core-app
+        run: npm ci --no-audit --no-fund
+
+      - name: Sync Capacitor Android assets
+        working-directory: apps/vexera-core-app
+        run: npx cap sync android
+
+      - name: Test and assemble Android app
+        working-directory: apps/vexera-core-app/android
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestJavaWithJavac :app:assembleDebug
