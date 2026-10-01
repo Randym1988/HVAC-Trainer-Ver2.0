@@ -179,6 +179,7 @@ HVAC Trainer Ver2.0/
 │     ├─ backend/                         # FastAPI control engine and simulation logic
 │     ├─ frontend/                        # NGINX-based UI delivery layer
 │     ├─ mosquitto/                        # MQTT broker configuration
+│     ├─ web/assets/                       # Shared instructor and student artwork
 │     ├─ web/
 │     │  ├─ instructor/                   # Instructor dashboard and operator tooling
 │     │  └─ student/                      # Student diagnostics and learning interface
@@ -235,6 +236,14 @@ The instructor experience is served from the web application layer under:
 
 - `platform/docker-engine/web/instructor/index.html`
 
+<p align="center">
+    <img src="platform/docker-engine/web/assets/alpha-omega-mark.png" alt="Alpha &amp; Omega Engine logo" width="150">
+</p>
+
+<p align="center">
+    <img src="platform/docker-engine/web/assets/splash-screen-instructor-v2.png" alt="Vexera Core instructor portal splash screen" width="720">
+</p>
+
 This environment enables:
 
 - Trainer viewing and selection
@@ -242,6 +251,10 @@ This environment enables:
 - Fault generation and scenario control
 - Student performance tracking
 - Instructor authentication and administrative actions
+- Alpha &amp; Omega Engine branding above the instructor dashboard title
+- A full-screen splash/login background and a discreet `POWERED BY ALPHA & OMEGA ENGINE` credit at the document bottom
+
+Instructor branding assets are served from `platform/docker-engine/web/assets/` and copied into the NGINX frontend image by `platform/docker-engine/frontend/Dockerfile`.
 
 ### Student Application
 
@@ -311,8 +324,8 @@ curl http://localhost:8000/api/status
 
 ### Default local web endpoints
 
-- Instructor UI: `http://localhost` or the configured frontend host
-- Student UI: `http://localhost/student`
+- Instructor UI: `http://localhost:8080/instructor`
+- Student UI: `http://localhost:8080/student`
 - Engine API: `http://localhost:8000/api/status`
 
 ---
