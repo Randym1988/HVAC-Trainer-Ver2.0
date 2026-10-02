@@ -3947,6 +3947,18 @@
           const res = await fetch("/api/edges", { cache: "no-store" });
           if (!res.ok) {
             console.error("[refreshEdges] Server returned error:", res.status);
+            if (res.status === 401 || res.status === 403) {
+              const loginError = document.getElementById("login_error");
+              loginError.textContent =
+                res.status === 401
+                  ? "Instructor session expired. Sign in again."
+                  : "Instructor access is required. Sign in with an instructor account.";
+              loginError.style.display = "block";
+              document.body.classList.add("login-mode");
+              const loginOverlay = document.getElementById("login-overlay");
+              loginOverlay.style.display = "flex";
+              loginOverlay.style.opacity = "1";
+            }
             return;
           }
           const payload = await res.json();

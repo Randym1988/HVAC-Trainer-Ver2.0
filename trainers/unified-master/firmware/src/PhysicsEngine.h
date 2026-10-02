@@ -46,6 +46,7 @@ private:
 
     uint32_t telemetry_timer;
     uint32_t comp_start_time;
+    uint32_t simulation_update_time;
     bool last_comp_state;
 
     float sim_comp_amps, sim_od_fan_amps, sim_id_fan_amps;

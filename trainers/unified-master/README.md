@@ -91,3 +91,18 @@ Notes:
 - The response includes a short-lived bearer token. Send it as `Authorization: Bearer <token>` for trainer API writes.
 - Status, identity, and engine discovery reads remain public. Trainer controls and user management require an instructor role; diagnosis submission remains available to student and guest training flows.
 - Browser firmware updates require HTTP Digest authentication. The OTA password is still shared by the firmware and update script, so use the trainer only on a trusted network until that credential is moved to per-device provisioning.
+
+## MQTT Credentials
+
+The local broker requires authentication. Generate the local engine and per-trainer credentials before starting the stack:
+
+```powershell
+Set-Location "e:\Randy\HVAC Trainer Ver2.0"
+.\tools\setup-mqtt-auth.ps1
+```
+
+The script stores secrets locally in the ignored `platform/docker-engine/.env` and writes only password hashes to Mosquitto’s ignored data directory. Do not commit either file.
+
+The firmware stores optional MQTT credentials in NVS. After flashing the credential-capable firmware, log in to each trainer as an instructor and provision its matching account with `POST /api/mqtt/credentials` using form fields `username` and `password`. The username must match the assigned trainer ID (for example, `trainer01`), and the password must be 20-128 characters. Use the matching `MQTT_TRAINERxx_PASSWORD` value from the local `.env` without pasting it into chat.
+
+The trainer provisioning endpoint currently uses HTTP. Provision only on a trusted local network until TLS is configured for trainer web access. Do not bring a trainer back online against the authenticated broker until its matching credentials have been provisioned.

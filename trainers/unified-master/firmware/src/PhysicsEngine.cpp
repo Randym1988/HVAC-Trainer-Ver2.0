@@ -1,8 +1,17 @@
 #include "PhysicsEngine.h"
+#include "RefrigerantPressure.h"
+#include <math.h>
+
+namespace {
+constexpr float kPressureEqualizationTimeSeconds = 120.0f;
+constexpr float kSupplyAirResponseTimeSeconds = 30.0f;
+constexpr float kSupplyAirRecoveryTimeSeconds = 60.0f;
+}
 
 PhysicsEngine::PhysicsEngine()
 	: telemetry_timer(0),
 	  comp_start_time(0),
+	  simulation_update_time(0),
 	  last_comp_state(false),
 	  sim_comp_amps(0.0f),
 	  sim_od_fan_amps(0.0f),
@@ -47,6 +56,7 @@ void PhysicsEngine::reset() {
 	force_pressure_snap = true;
 	last_comp_state = false;
 	comp_start_time = 0;
+	simulation_update_time = millis();
     flame_active = false;
     blower_running = false;
     high_limit_tripped = false;
@@ -67,9 +77,14 @@ void PhysicsEngine::reset() {
 	sim_id_supply_temp = set_id_temp - 2.0f;
 	sim_id_rh = set_rh;
 
-	sim_od_low_press = 125.0f;
-	sim_od_high_press = 320.0f;
-	sim_od_liquid_press = 305.0f;
+	float static_pressure = 145.0f;
+	const float equalized_temp_f = (set_od_temp + set_id_temp) * 0.5f;
+	refrigerant_pressure::meanSaturationPressurePsig(
+		current_refrigerant, equalized_temp_f, static_pressure
+	);
+	sim_od_low_press = static_pressure;
+	sim_od_high_press = static_pressure;
+	sim_od_liquid_press = static_pressure;
 	sim_od_suction_temp = sim_id_supply_temp + 6.0f;
 	sim_od_liquid_temp = sim_od_ambient + 5.0f;
 	sim_od_discharge = sim_od_ambient + 55.0f;
@@ -96,7 +111,9 @@ float PhysicsEngine::add_noise(float base, float variance) {
 void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_blower_on, const bool* faults) {
 	bool has_faults = faults != nullptr;
 	bool compressor_failed = has_faults && (faults[4] || faults[31]);
-	bool cooling_call = y_call && !compressor_failed;
+	bool pressure_switch_open = phys_lps_tripped || phys_hps_tripped ||
+		(has_faults && (faults[7] || faults[8] || faults[26] || faults[27]));
+	bool cooling_call = y_call && !compressor_failed && !pressure_switch_open;
 	bool indoor_fan_failed = has_faults && faults[24];
 	bool outdoor_fan_failed = has_faults && faults[6];	
     
@@ -105,6 +122,11 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_
     // The `w_call` is our "Gas Valve Input" for the purpose of this simulation
     bool gas_valve_active = w_call;
     uint32_t now = millis();
+	const uint32_t elapsed_ms = now - simulation_update_time;
+	simulation_update_time = now;
+	const float elapsed_seconds = static_cast<float>(elapsed_ms) / 1000.0f;
+	const float pressure_alpha = 1.0f - expf(
+		-elapsed_seconds / kPressureEqualizationTimeSeconds);
 
     // 1. Flame/Gas Monitoring
     if (gas_valve_active && gas_valve_on_time == 0) {
@@ -153,13 +175,16 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_
 	last_comp_state = cooling_call;
 
 	if (cooling_call) {
-		float lp_base = current_refrigerant == "R22" ? 68.0f : 122.0f;
-		float hp_base = current_refrigerant == "R22" ? 245.0f : 340.0f;
-
-		if (!id_is_txv) {
-			lp_base -= 8.0f;
-			hp_base += 10.0f;
-		}
+		const float evaporating_temp_f = set_id_temp - (id_is_txv ? 35.0f : 40.0f);
+		const float condensing_temp_f = set_od_temp + (outdoor_fan_failed ? 50.0f : 20.0f);
+		float lp_base = 122.0f;
+		float hp_base = 340.0f;
+		refrigerant_pressure::saturationPressurePsig(
+			current_refrigerant, evaporating_temp_f, true, lp_base
+		);
+		refrigerant_pressure::saturationPressurePsig(
+			current_refrigerant, condensing_temp_f, false, hp_base
+		);
 
 		if (has_faults && faults[46]) {
 			lp_base -= 20.0f;
@@ -193,16 +218,21 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_
 			hp_base -= 15.0f;
 		}
 
-		if (outdoor_fan_failed) {
-			hp_base += 120.0f;
-		}
+		float evaporating_actual_temp = evaporating_temp_f;
+		float condensing_actual_temp = condensing_temp_f;
+		refrigerant_pressure::saturationTemperatureF(
+			current_refrigerant, lp_base, true, evaporating_actual_temp
+		);
+		refrigerant_pressure::saturationTemperatureF(
+			current_refrigerant, hp_base, false, condensing_actual_temp
+		);
 
-		sim_od_low_press = add_noise(lp_base, 1.0f);
-		sim_od_high_press = add_noise(hp_base, 2.0f);
+		sim_od_low_press = lp_base;
+		sim_od_high_press = hp_base;
 		sim_od_liquid_press = sim_od_high_press - 12.0f;
 
-		sim_od_suction_temp = add_noise((set_id_temp - 18.0f), 0.4f);
-		sim_od_liquid_temp = add_noise((set_od_temp + 12.0f), 0.5f);
+		sim_od_suction_temp = add_noise(evaporating_actual_temp + 12.0f, 0.4f);
+		sim_od_liquid_temp = add_noise(condensing_actual_temp - 10.0f, 0.5f);
 		sim_od_discharge = add_noise((set_od_temp + 70.0f), 1.5f);
 
 		sim_comp_amps = 8.5f;
@@ -211,15 +241,30 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call, bool physical_
 		if (has_faults && faults[44]) sim_comp_amps -= 0.8f;
 	} else {
         sim_comp_amps = 0.0f;
-		sim_od_low_press = add_noise(125.0f, 0.5f);
-		sim_od_high_press = add_noise(130.0f, 0.5f);
-		sim_od_liquid_press = sim_od_high_press;
+		float equilibrium_pressure = 145.0f;
+		const float equalized_temp_f = (set_od_temp + set_id_temp) * 0.5f;
+		refrigerant_pressure::meanSaturationPressurePsig(
+			current_refrigerant, equalized_temp_f, equilibrium_pressure
+		);
+		sim_od_low_press += (equilibrium_pressure - sim_od_low_press) * pressure_alpha;
+		sim_od_high_press += (equilibrium_pressure - sim_od_high_press) * pressure_alpha;
+		sim_od_liquid_press += (equilibrium_pressure - sim_od_liquid_press) * pressure_alpha;
 		sim_od_suction_temp = add_noise(set_id_temp, 0.3f);
 		sim_od_liquid_temp = add_noise(set_od_temp, 0.3f);
 		sim_od_discharge = add_noise(set_od_temp + 8.0f, 0.4f);
 	}
 
-    sim_id_supply_temp = add_noise(set_id_temp, 0.2f); // Revert to simple ambient tracking
+	float target_supply_temp = set_id_temp;
+	if (blower_running && cooling_call) {
+		target_supply_temp = set_id_temp - 20.0f;
+	} else if (blower_running && flame_active) {
+		target_supply_temp = set_id_temp + 45.0f;
+	}
+	const float supply_time_constant = blower_running
+		? kSupplyAirResponseTimeSeconds
+		: kSupplyAirRecoveryTimeSeconds;
+	const float supply_alpha = 1.0f - expf(-elapsed_seconds / supply_time_constant);
+	sim_id_supply_temp += (target_supply_temp - sim_id_supply_temp) * supply_alpha;
 
 	// Refrigerant-specific pressure switch model with hysteresis.
 	float lps_trip = 40.0f;

@@ -316,6 +316,23 @@ cd "platform/docker-engine"
 docker compose up -d --build
 ```
 
+### Initialize or rotate local users
+
+Fresh installations start with an empty user database. Create the first administrator with a password entered at the hidden terminal prompt:
+
+```bash
+docker compose exec engine python manage_users.py bootstrap-admin admin
+```
+
+Rotate a password on an existing account without placing the password in shell history:
+
+```bash
+docker compose exec engine python manage_users.py set-password student
+docker compose restart engine
+```
+
+The command preserves the account role and stores a password hash. Existing user databases are not overwritten during startup.
+
 ### Verify service health
 
 ```bash

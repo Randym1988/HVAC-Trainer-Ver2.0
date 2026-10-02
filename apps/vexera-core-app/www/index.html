@@ -708,6 +708,36 @@
           DIAGNOSTIC ACCESS
         </p>
 
+        <div id="engine-host-config" style="display: none; text-align: left">
+          <label
+            for="engine_host"
+            style="
+              display: block;
+              color: var(--text-muted);
+              font-size: 12px;
+              margin-bottom: 6px;
+            "
+            >Training server</label
+          >
+          <input
+            type="text"
+            id="engine_host"
+            placeholder="192.168.1.20:8000"
+            autocomplete="url"
+            style="
+              width: 100%;
+              padding: 14px;
+              margin-bottom: 15px;
+              background: rgba(0, 0, 0, 0.5);
+              border: 1px solid var(--border-color);
+              color: white;
+              border-radius: 10px;
+              font-size: 14px;
+              outline: none;
+            "
+          />
+        </div>
+
         <input
           type="text"
           id="login_user"
@@ -783,9 +813,16 @@
     <script>
       document.body.classList.add("login-mode");
       window.addEventListener("DOMContentLoaded", () => {
+        const engineHostConfig = document.getElementById("engine-host-config");
+        if (isNativeApp()) {
+          engineHostConfig.style.display = "block";
+          document.getElementById("engine_host").value =
+            localStorage.getItem("vexera_engine_host") || "";
+        }
         const token = sessionStorage.getItem("hvac_api_token");
-        if (!token) return;
-        fetch(`${getApiBaseUrl()}/api/auth/check`, {
+        const apiBaseUrl = getApiBaseUrl();
+        if (!token || !apiBaseUrl) return;
+        fetch(`${apiBaseUrl}/api/auth/check`, {
           headers: { Authorization: `Bearer ${token}` },
         })
           .then((response) => {
@@ -1388,7 +1425,28 @@
         window.location.host ||
         "localhost:8000";
 
+      function isNativeApp() {
+        return Boolean(
+          window.Capacitor &&
+          typeof window.Capacitor.getPlatform === "function" &&
+          window.Capacitor.getPlatform() !== "web",
+        );
+      }
+
+      function normalizeEngineHost(value) {
+        const host = String(value || "")
+          .trim()
+          .replace(/^https?:\/\//i, "")
+          .replace(/\/+$/, "");
+        return /^[^/\s]+(?::\d+)?$/.test(host) ? host : "";
+      }
+
       function getTargetHost() {
+        if (isNativeApp()) {
+          return normalizeEngineHost(
+            localStorage.getItem("vexera_engine_host"),
+          );
+        }
         const hostWithPort = window.location.host;
         if (hostWithPort && hostWithPort.length > 0) {
           return hostWithPort;
@@ -1397,9 +1455,13 @@
       }
 
       function getApiBaseUrl() {
+        const targetHost = getTargetHost();
+        if (!targetHost) return "";
         const protocol =
-          window.location.protocol === "https:" ? "https" : "http";
-        return `${protocol}://${getTargetHost()}`;
+          !isNativeApp() && window.location.protocol === "https:"
+            ? "https"
+            : "http";
+        return `${protocol}://${targetHost}`;
       }
 
       function getApiAuthHeaders() {
@@ -1408,8 +1470,10 @@
       }
 
       function getWsUrl() {
+        const targetHost = getTargetHost();
+        if (!targetHost) return "";
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-        return `${wsProtocol}://${getTargetHost()}/ws`;
+        return `${wsProtocol}://${targetHost}/ws`;
       }
 
       function sendCommand(topic, value) {
@@ -1602,10 +1666,17 @@
             );
           }
         }
+        const trainerType = (data.trainer_type || "").toLowerCase();
+        const isFurnace =
+          trainerType === "straight_ac_furnace" || trainerType === "ac_gas";
+        const isHeatPump = trainerType === "heat_pump";
+        const coolingActive = data.y_call && !data.is_defrosting;
         document.getElementById("mode_ac").style.display =
-          data.y_call && data.o_call && !data.is_defrosting ? "inline" : "none";
+          coolingActive && (isFurnace || (!trainerType && data.o_call))
+            ? "inline"
+            : "none";
         document.getElementById("mode_hp").style.display =
-          data.y_call && !data.o_call && !data.is_defrosting
+          coolingActive && (isHeatPump || (!trainerType && !data.o_call))
             ? "inline"
             : "none";
 
@@ -1760,7 +1831,13 @@
           `${getApiBaseUrl()}/api/submit?diagnosis=${encodeURIComponent(a)}`,
           { method: "POST", headers: getApiAuthHeaders() },
         )
-          .then((r) => r.text())
+          .then(async (response) => {
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(text || `Request failed (${response.status})`);
+            }
+            return text;
+          })
           .then((text) => {
             if (text === "CORRECT") {
               showResultPopup(
@@ -1777,6 +1854,9 @@
             } else {
               alert("Transmitted Securely.");
             }
+          })
+          .catch((error) => {
+            alert(`Unable to submit answer: ${error.message}`);
           });
       }
 
@@ -1855,25 +1935,75 @@
         }, 10);
       }
 
-      function attemptLogin(type) {
-        let u = document.getElementById("login_user").value.trim();
-        let p = document.getElementById("login_pass").value.trim();
-        fetch(`${getApiBaseUrl()}/api/login`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-          },
-          body: new URLSearchParams({ user: u, pass: p, type }),
-        }).then(async (r) => {
-          if (r.ok) {
-            const result = await r.json();
-            if (result.token)
-              sessionStorage.setItem("hvac_api_token", result.token);
-            document.body.classList.remove("login-mode");
-            document.cookie = "vexera_auth=student; path=/";
-            document.getElementById("login-overlay").style.display = "none";
-          } else document.getElementById("login_error").style.display = "block";
-        });
+      async function attemptLogin(type) {
+        const username = document.getElementById("login_user").value.trim();
+        const password = document.getElementById("login_pass").value.trim();
+        const errorElement = document.getElementById("login_error");
+        const showLoginError = (message) => {
+          errorElement.textContent = `⚠ ${message}`;
+          errorElement.style.display = "block";
+        };
+        errorElement.style.display = "none";
+
+        if (isNativeApp()) {
+          const engineHost = normalizeEngineHost(
+            document.getElementById("engine_host").value,
+          );
+          if (!engineHost) {
+            showLoginError("Enter the training server address to sign in.");
+            return;
+          }
+          localStorage.setItem("vexera_engine_host", engineHost);
+          activeHost = engineHost;
+        }
+
+        const apiBaseUrl = getApiBaseUrl();
+        if (!apiBaseUrl) {
+          showLoginError("The training server address is not configured.");
+          return;
+        }
+
+        try {
+          const response = await fetch(`${apiBaseUrl}/api/login`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            },
+            body: new URLSearchParams({
+              user: username,
+              pass: password,
+              type,
+            }),
+          });
+
+          if (!response.ok) {
+            showLoginError(
+              response.status === 401
+                ? "Student ID or password was not accepted."
+                : `Training server returned error ${response.status}.`,
+            );
+            return;
+          }
+
+          const result = await response.json();
+          if (result.token) {
+            sessionStorage.setItem("hvac_api_token", result.token);
+          }
+          window.engineTelemetryConfigured = true;
+          if (ws) {
+            ws.close();
+            ws = null;
+          }
+          initWS();
+          document.body.classList.remove("login-mode");
+          document.cookie = "vexera_auth=student; path=/";
+          document.getElementById("login-overlay").style.display = "none";
+        } catch (error) {
+          console.error("Mobile login request failed:", error);
+          showLoginError(
+            `Cannot reach training server at ${apiBaseUrl}. Check the address and network.`,
+          );
+        }
       }
       function bypassLogin() {
         document.body.classList.remove("login-mode");
@@ -2172,10 +2302,12 @@
                   try {
                     const data = JSON.parse(trimmed);
                     bleBuffer = ""; // Reset buffer
-                    if (data.lp !== undefined) {
-                      handleBleTelemetry(data);
-                    } else {
-                      processTelemetry(data);
+                    if (!window.engineTelemetryConfigured) {
+                      if (data.lp !== undefined) {
+                        handleBleTelemetry(data);
+                      } else {
+                        processTelemetry(data);
+                      }
                     }
                   } catch (parseError) {
                     // JSON incomplete, continue accumulating
@@ -2197,11 +2329,7 @@
 
           window.connectedDeviceId = deviceId;
           window.isBleConnected = true;
-          if (ws) {
-            try {
-              ws.close();
-            } catch (e) {}
-          }
+          initWS();
 
           document.getElementById("ws-status").classList.add("live");
         } catch (error) {
@@ -2212,21 +2340,33 @@
 
       function initWS() {
         const wsUrl = getWsUrl();
+        if (!wsUrl) return;
+        if (
+          ws &&
+          (ws.readyState === WebSocket.CONNECTING ||
+            ws.readyState === WebSocket.OPEN)
+        ) {
+          return;
+        }
         console.log(`Connecting to Vexera Core Bus at: ${wsUrl}`);
-        ws = new WebSocket(wsUrl);
+        const socket = new WebSocket(wsUrl);
+        ws = socket;
 
-        ws.onopen = () => {
+        socket.onopen = () => {
+          if (ws !== socket) return;
           document.getElementById("ws-status").classList.add("live");
+          window.engineTelemetryConnected = true;
         };
 
-        ws.onclose = () => {
-          if (!window.isBleConnected) {
-            document.getElementById("ws-status").classList.remove("live");
-            setTimeout(initWS, 2000);
-          }
+        socket.onclose = () => {
+          if (ws !== socket) return;
+          ws = null;
+          window.engineTelemetryConnected = false;
+          document.getElementById("ws-status").classList.remove("live");
+          setTimeout(initWS, 2000);
         };
 
-        ws.onmessage = (e) => {
+        socket.onmessage = (e) => {
           try {
             processTelemetry(JSON.parse(e.data));
           } catch (parseError) {
@@ -2245,10 +2385,12 @@
           }
 
           const data = JSON.parse(rawValue);
-          if (data.lp !== undefined) {
-            handleBleTelemetry(data);
-          } else {
-            processTelemetry(data);
+          if (!window.engineTelemetryConfigured) {
+            if (data.lp !== undefined) {
+              handleBleTelemetry(data);
+            } else {
+              processTelemetry(data);
+            }
           }
         } catch (error) {
           console.error(

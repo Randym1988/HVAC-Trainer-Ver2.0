@@ -38,6 +38,37 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Generate ephemeral MQTT credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          engine_password="$(openssl rand -hex 32)"
+          trainer01_password="$(openssl rand -hex 32)"
+          trainer02_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$engine_password"
+          echo "::add-mask::$trainer01_password"
+          echo "::add-mask::$trainer02_password"
+          {
+            printf 'MQTT_ENGINE_USERNAME=engine\n'
+            printf 'MQTT_ENGINE_PASSWORD=%s\n' "$engine_password"
+            printf 'MQTT_TRAINER01_PASSWORD=%s\n' "$trainer01_password"
+            printf 'MQTT_TRAINER02_PASSWORD=%s\n' "$trainer02_password"
+          } >> "$GITHUB_ENV"
+          mkdir -p platform/docker-engine/mosquitto/data
+          docker run --rm \
+            --volume "$PWD/platform/docker-engine/mosquitto/data:/mosquitto/data" \
+            --entrypoint mosquitto_passwd eclipse-mosquitto:2 \
+            -b -c /mosquitto/data/passwd engine "$engine_password"
+          docker run --rm \
+            --volume "$PWD/platform/docker-engine/mosquitto/data:/mosquitto/data" \
+            --entrypoint mosquitto_passwd eclipse-mosquitto:2 \
+            -b /mosquitto/data/passwd trainer01 "$trainer01_password"
+          docker run --rm \
+            --volume "$PWD/platform/docker-engine/mosquitto/data:/mosquitto/data" \
+            --entrypoint mosquitto_passwd eclipse-mosquitto:2 \
+            -b /mosquitto/data/passwd trainer02 "$trainer02_password"
+          chmod 644 platform/docker-engine/mosquitto/data/passwd
+
       - name: Validate Compose configuration
         run: docker compose -f platform/docker-engine/docker-compose.yml config --quiet
 

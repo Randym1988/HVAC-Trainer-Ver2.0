@@ -1,5 +1,6 @@
 import asyncio
 import time
+import math
 import random
 import os
 import socket
@@ -29,10 +30,18 @@ from aiomqtt import Client as MQTTClient, MqttError
 
 app = FastAPI()
 
-# Enable CORS for local dev connecting from the App or standard browser
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,10 +53,14 @@ mqtt_client: Optional[MQTTClient] = None
 simulation_task: Optional[asyncio.Task] = None
 mqtt_task: Optional[asyncio.Task] = None
 MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME") or None
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD") or None
 EDGE_REQUIRED = os.getenv("EDGE_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
 SIMULATION_TICK_SECONDS = 0.20
 WS_BROADCAST_INTERVAL_SECONDS = 0.15
-EDGE_TIMEOUT_SECONDS = float(os.getenv("EDGE_TIMEOUT_SECONDS", "3.0"))
+SUPPLY_AIR_RESPONSE_TIME_SECONDS = 30.0
+SUPPLY_AIR_RECOVERY_TIME_SECONDS = 60.0
+EDGE_TIMEOUT_SECONDS = float(os.getenv("EDGE_TIMEOUT_SECONDS", "8.0"))
 MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
 mdns = None
 mdns_service_info = None
@@ -123,14 +136,9 @@ def write_json_atomically(file_path: str, data: Any) -> None:
 
 
 def load_users_db() -> Dict[str, Dict[str, str]]:
-    defaults: Dict[str, Dict[str, str]] = {
-        "admin": {"pw": "admin", "role": "instructor"},
-        "student": {"pw": "student", "role": "student"},
-    }
-
     if not os.path.exists(USERS_DB_FILE):
-        write_json_atomically(USERS_DB_FILE, defaults)
-        return defaults
+        write_json_atomically(USERS_DB_FILE, {})
+        return {}
 
     try:
         with open(USERS_DB_FILE, "r", encoding="utf-8") as f:
@@ -145,9 +153,16 @@ def load_users_db() -> Dict[str, Dict[str, str]]:
             f"Users database {USERS_DB_FILE!r} must contain a JSON object"
         )
 
-    for username, meta in defaults.items():
-        if username not in loaded:
-            loaded[username] = meta
+    legacy_users = sorted(
+        username
+        for username, record in loaded.items()
+        if isinstance(record, dict) and "pw" in record and "pw_hash" not in record
+    )
+    if legacy_users:
+        print(
+            "[Auth] Plaintext password records require rotation with "
+            f"manage_users.py set-password: {', '.join(legacy_users)}"
+        )
     return loaded
 
 
@@ -234,6 +249,9 @@ def load_edges_db() -> Dict[str, Dict[str, Any]]:
                 "ram": edge.get("ram", 245760),
                 "uptime": edge.get("uptime", "00:00:00"),
                 "temp": edge.get("temp", 98.0),
+                "student_score": edge.get("student_score", 100),
+                "diagnosis": edge.get("diagnosis", "None"),
+                "work_history": edge.get("work_history", ""),
                 "identity_reboot_required": bool(
                     edge.get("identity_reboot_required", False)
                 ),
@@ -273,6 +291,9 @@ def save_edges_db(force: bool = False) -> None:
             "ram": edge.get("ram", 245760),
             "uptime": edge.get("uptime", "00:00:00"),
             "temp": edge.get("temp", 98.0),
+            "student_score": edge.get("student_score", 100),
+            "diagnosis": edge.get("diagnosis", "None"),
+            "work_history": edge.get("work_history", ""),
             "identity_reboot_required": bool(
                 edge.get("identity_reboot_required", False)
             ),
@@ -472,6 +493,9 @@ def persist_selected_runtime() -> None:
         return
     runtime = ensure_edge_runtime(selected)
     save_state_to_runtime(runtime)
+    selected["student_score"] = state.student_score
+    selected["diagnosis"] = state.latest_diagnosis
+    selected["work_history"] = state.work_history_log
 
 
 def normalize_trainer_type(value: Optional[str]) -> str:
@@ -505,6 +529,9 @@ def sync_selected_edge_into_state() -> None:
     state.edge_last_seen = selected.get("last_seen", 0.0)
     state.edge_connected = get_edge_connected(state.edge_last_seen)
     state.trainer_type = selected.get("trainer_type", "ac_gas")
+    state.student_score = selected.get("student_score", state.student_score)
+    state.latest_diagnosis = selected.get("diagnosis", state.latest_diagnosis)
+    state.work_history_log = selected.get("work_history", state.work_history_log)
 
     state.state_w = bool(selected.get("w", state.state_w))
     state.state_y = bool(selected.get("y", state.state_y))
@@ -627,7 +654,11 @@ async def simulation_loop():
     Replaces the loop() function inside the ESP32.
     Runs continuously in the background parsing physics and timers.
     """
+    last_tick = time.monotonic()
     while True:
+        tick_time = time.monotonic()
+        elapsed_seconds = min(max(tick_time - last_tick, 0.0), 1.0)
+        last_tick = tick_time
         now = time.time()
         sim_edge: Optional[Dict[str, Any]] = None
         if state.edges:
@@ -955,9 +986,12 @@ async def simulation_loop():
             if od_fan_fail:
                 state.sim_od_suction_temp = add_noise(5.0, 0.5)
 
-        # Furnace-specific temperature simulation
-        if state.trainer_type == "ac_gas" and phys_heating:
-            target_supply = 130.0
+        # Furnace supply air warms only after ignition and blower startup.
+        if state.trainer_type == "ac_gas":
+            if state.furnace_state == "FURNACE_HEATING" and state.heat_blower_on:
+                target_supply = state.set_id_temp + 45.0
+            elif not phys_cooling:
+                target_supply = state.set_id_temp
 
         if state.force_pressure_snap and is_compressor:
             state.sim_od_low_press = target_low
@@ -981,7 +1015,21 @@ async def simulation_loop():
         if id_fan_fail:
             target_supply = 160.0 if phys_heating else state.set_id_temp
 
-        state.sim_id_supply_temp += (target_supply - state.sim_id_supply_temp) * 0.05
+        airflow_active = not id_fan_fail and (
+            effective_w_call
+            or effective_y_call
+            or state.heat_blower_on
+            or state.fault_active[25]
+        )
+        supply_time_constant = (
+            SUPPLY_AIR_RESPONSE_TIME_SECONDS
+            if airflow_active
+            else SUPPLY_AIR_RECOVERY_TIME_SECONDS
+        )
+        supply_alpha = 1.0 - math.exp(-elapsed_seconds / supply_time_constant)
+        state.sim_id_supply_temp += (
+            target_supply - state.sim_id_supply_temp
+        ) * supply_alpha
         state.sim_od_ambient = add_noise(state.set_od_temp, 0.06)
         state.sim_id_return_temp = add_noise(state.set_id_temp, 0.06)
         state.sim_id_ambient = add_noise(state.set_id_temp, 0.06)
@@ -1218,7 +1266,11 @@ async def mqtt_command_listener():
     global mqtt_client
     while True:
         try:
-            async with MQTTClient(MQTT_HOST) as client:
+            async with MQTTClient(
+                MQTT_HOST,
+                username=MQTT_USERNAME,
+                password=MQTT_PASSWORD,
+            ) as client:
                 mqtt_client = client
                 await client.subscribe("trainer/+/command")
                 async for message in client.messages:
@@ -1271,6 +1323,71 @@ async def send_trainer_command(
             status_code=500, detail=f"Failed to publish MQTT message: {e}"
         )
     return {"message": "command sent", "trainer_id": trainer_id}
+
+
+async def publish_selected_trainer_command(command: Dict[str, Any]) -> bool:
+    trainer_id = state.selected_edge_id
+    selected = get_selected_edge()
+    if (
+        not trainer_id
+        or not selected
+        or not get_edge_connected(float(selected.get("last_seen", 0.0)))
+        or mqtt_client is None
+    ):
+        return False
+
+    try:
+        await mqtt_client.publish(
+            f"trainer/{trainer_id}/command", json.dumps(command), qos=1
+        )
+    except MqttError as exc:
+        print(f"[MQTT] Failed to sync settings to {trainer_id}: {exc}")
+        return False
+    return True
+
+
+def trainer_settings_sync_command(
+    telemetry: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if "refrigerant" not in telemetry:
+        return None
+
+    expected = {
+        "od": state.set_od_temp,
+        "id": state.set_id_temp,
+        "rh": state.set_rh,
+        "refrigerant": state.current_refrigerant,
+        "id_txv": int(state.id_is_txv),
+        "od_txv": int(state.od_is_txv),
+        "is_b_type": int(state.is_b_type),
+    }
+    reported_keys = {
+        "od": "set_od",
+        "id": "set_id",
+        "rh": "set_rh",
+        "refrigerant": "refrigerant",
+        "id_txv": "id_is_txv",
+        "od_txv": "od_is_txv",
+        "is_b_type": "is_b_type",
+    }
+
+    for setting, telemetry_key in reported_keys.items():
+        if telemetry_key not in telemetry:
+            continue
+        reported = telemetry[telemetry_key]
+        target = expected[setting]
+        if setting == "refrigerant":
+            if str(reported) != target:
+                break
+        elif setting in {"id_txv", "od_txv", "is_b_type"}:
+            if int(reported) != target:
+                break
+        elif abs(float(reported) - float(target)) > 0.1:
+            break
+    else:
+        return None
+
+    return {"action": "set_settings", **expected}
 
 
 # ==========================================
@@ -1494,8 +1611,16 @@ async def update_ambient(
         state.set_rh = rh
 
     persist_selected_runtime()
+    trainer_synced = await publish_selected_trainer_command(
+        {
+            "action": "set_ambient",
+            "od": state.set_od_temp,
+            "id": state.set_id_temp,
+            "rh": state.set_rh,
+        }
+    )
 
-    return {"message": "OK"}
+    return {"message": "OK", "trainer_synced": trainer_synced}
 
 
 @app.post("/api/reset")
@@ -1711,7 +1836,9 @@ async def submit_diagnosis(
     state.mobile_app_last_seen = time.time()
 
     # --- FIX: Operate on the specific edge that submitted the diagnosis ---
-    submitting_edge_id = (edge_id or "").strip()
+    submitting_edge_id = (edge_id or "").strip() or (
+        state.selected_edge_id or ""
+    ).strip()
     if not submitting_edge_id or submitting_edge_id not in state.edges:
         raise HTTPException(status_code=404, detail="Submitting edge not found")
 
@@ -1724,12 +1851,20 @@ async def submit_diagnosis(
     expected = get_expected_diagnosis()
     state.latest_diagnosis = diagnosis  # Update the temporary state
 
+    def persist_submission() -> None:
+        submitting_edge["diagnosis"] = state.latest_diagnosis
+        submitting_edge["student_score"] = state.student_score
+        submitting_edge["work_history"] = state.work_history_log
+        save_state_to_runtime(runtime)
+        save_edges_db()
+
     if diagnosis.upper() == expected.upper() or "CORRECT" in diagnosis.upper():
         state.reset_all_faults_and_sims()
+        state.latest_diagnosis = f"CORRECT: {diagnosis}"
         state.work_history_log += (
             f"[{time.strftime('%H:%M:%S')}] Submitted {diagnosis}: CORRECT\n"
         )
-        save_state_to_runtime(runtime)
+        persist_submission()
 
         if submitting_edge_id and mqtt_client:
             try:
@@ -1751,10 +1886,11 @@ async def submit_diagnosis(
         state.work_history_log += (
             f"[{time.strftime('%H:%M:%S')}] Submitted {diagnosis}: INCORRECT\n"
         )
+        state.latest_diagnosis = f"INCORRECT: {diagnosis}"
         state.student_score -= 10
         if state.student_score < 0:
             state.student_score = 0
-        save_state_to_runtime(runtime)
+        persist_submission()
         if state.selected_edge_id != submitting_edge_id:
             sync_selected_edge_into_state()
         return Response(content="INCORRECT", media_type="text/plain")
@@ -1779,7 +1915,10 @@ async def update_refrigerant(
         raise HTTPException(status_code=400, detail="type is required")
     state.current_refrigerant = type
     persist_selected_runtime()
-    return {"message": "OK"}
+    trainer_synced = await publish_selected_trainer_command(
+        {"action": "set_refrigerant", "type": type}
+    )
+    return {"message": "OK", "trainer_synced": trainer_synced}
 
 
 class MeteringUpdate(BaseModel):
@@ -1812,7 +1951,14 @@ async def update_metering(
         state.od_is_txv = od_txv == 1
 
     persist_selected_runtime()
-    return {"message": "OK"}
+    trainer_synced = await publish_selected_trainer_command(
+        {
+            "action": "set_metering",
+            "id_txv": state.id_is_txv,
+            "od_txv": state.od_is_txv,
+        }
+    )
+    return {"message": "OK", "trainer_synced": trainer_synced}
 
 
 @app.get("/api/auth/check")
@@ -2006,6 +2152,9 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
         "ram",
         "uptime",
         "temp",
+        "student_score",
+        "diagnosis",
+        "work_history",
     }
     prev_telemetry = prev.get("telemetry", {}) if isinstance(prev, dict) else {}
     telemetry = dict(prev_telemetry)
@@ -2013,6 +2162,26 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
         if key in core_keys:
             continue
         telemetry[key] = value
+
+    incoming_diagnosis = req.get("diagnosis")
+    has_device_diagnosis = (
+        isinstance(incoming_diagnosis, str)
+        and incoming_diagnosis.strip()
+        and incoming_diagnosis.strip().upper() != "NONE"
+    )
+    preserve_engine_summary = bool(prev) and not has_device_diagnosis
+    if preserve_engine_summary:
+        student_score = prev.get("student_score", req.get("student_score", 100))
+        diagnosis = prev.get("diagnosis", "None")
+        work_history = prev.get("work_history", "")
+    else:
+        student_score = (
+            req.get("student_score")
+            if req.get("student_score") is not None
+            else prev.get("student_score", 100)
+        )
+        diagnosis = incoming_diagnosis or prev.get("diagnosis", "None")
+        work_history = req.get("work_history") or prev.get("work_history", "")
 
     state.edges[edge_id] = {
         "edge_id": edge_id,
@@ -2041,6 +2210,9 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
         "temp": req.get("temp")
         if req.get("temp") is not None
         else prev.get("temp", 98.0),
+        "student_score": student_score,
+        "diagnosis": diagnosis,
+        "work_history": work_history,
         "identity_reboot_required": req.get("identity_reboot_required", False),
         "mac": mac_address or prev.get("mac", ""),
         "telemetry": telemetry,
@@ -2054,6 +2226,11 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
         sync_selected_edge_into_state()
 
     save_edges_db()
+
+    if state.selected_edge_id == edge_id:
+        settings_command = trainer_settings_sync_command(telemetry)
+        if settings_command is not None:
+            await publish_selected_trainer_command(settings_command)
 
     return {
         "message": "OK",

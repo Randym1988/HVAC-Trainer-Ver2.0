@@ -25,6 +25,7 @@ __pycache__/
 
 # Local engine state and OTA artifacts
 platform/docker-engine/backend/data/
+platform/docker-engine/mosquitto/data/
 tools/.ota-artifacts/
 tools/trainer-instance-registry.json
 

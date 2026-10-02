@@ -14,17 +14,22 @@
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include "main.h"
 #include <AsyncMqttClient.h>
 #include "FurnaceController.h"
 #include "PhysicsEngine.h"
+#include "RefrigerantPressure.h"
 #include "TrainerInstance.h"
 
 // ==========================================
 // DOCKER ENGINE LINK
 // ==========================================
 const char* ENGINE_CONFIG_FILE = "/engine.json";
+const char* MQTT_CONFIG_NAMESPACE = "mqtt_auth";
 String engine_base_url = "";
+String mqtt_username = "";
+String mqtt_password = "";
 String EDGE_ID_HEAT_PUMP = "";
 String EDGE_LABEL_HEAT_PUMP = "";
 const char* TRAINER_TYPE_HEAT_PUMP = "heat_pump";
@@ -37,7 +42,7 @@ const char* TRAINER_TYPE = TRAINER_TYPE_HEAT_PUMP;
 const uint16_t TRAINER_INSTANCE_ID = TRAINER_INSTANCE;
 bool is_identity_resolved = false;
 String OTA_HOSTNAME = "";
-const uint32_t ENGINE_HEARTBEAT_INTERVAL_MS = 200;
+const uint32_t ENGINE_HEARTBEAT_INTERVAL_MS = 1000;
 const uint32_t ENGINE_DISCOVERY_RETRY_MS = 15000;
 uint32_t engine_heartbeat_timer = 0;
 uint32_t next_engine_discovery_ms = 0;
@@ -349,12 +354,45 @@ String loadEngineBaseUrl() {
 
 void saveEngineBaseUrl(const String& baseUrl) {
   if (baseUrl.length() == 0) return;
+  if (loadEngineBaseUrl() == baseUrl) return;
   File f = LittleFS.open(ENGINE_CONFIG_FILE, FILE_WRITE);
   if (!f) return;
   JsonDocument doc;
   doc["base_url"] = baseUrl;
   serializeJson(doc, f);
   f.close();
+}
+
+bool loadMqttCredentials() {
+  Preferences preferences;
+  if (!preferences.begin(MQTT_CONFIG_NAMESPACE, true)) return false;
+  String serialized = preferences.getString("credentials", "");
+  preferences.end();
+  if (serialized.length() == 0) return false;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, serialized)) return false;
+  mqtt_username = doc["username"].as<String>();
+  mqtt_password = doc["password"].as<String>();
+  return mqtt_username.length() > 0 && mqtt_password.length() > 0;
+}
+
+bool saveMqttCredentials(const String& username, const String& password) {
+  JsonDocument doc;
+  doc["username"] = username;
+  doc["password"] = password;
+  String serialized;
+  serializeJson(doc, serialized);
+
+  Preferences preferences;
+  if (!preferences.begin(MQTT_CONFIG_NAMESPACE, false)) return false;
+  size_t written = preferences.putString("credentials", serialized);
+  preferences.end();
+  if (written == 0) return false;
+
+  mqtt_username = username;
+  mqtt_password = password;
+  return true;
 }
 
 String discoverEngineBaseUrl(bool allowStored = true) {
@@ -369,14 +407,14 @@ String discoverEngineBaseUrl(bool allowStored = true) {
     }
   }
 
-  // Scan the /24 subnet for a host responding on :8000/api/edges
+  // Scan the /24 subnet for a host responding on the public status endpoint.
   IPAddress localIP = WiFi.localIP();
   if (localIP != IPAddress(0, 0, 0, 0)) {
     HTTPClient scanHttp;
     char scanBuf[42];
     for (int scanI = 1; scanI < 255; scanI++) {
       if (scanI == localIP[3]) continue;
-      snprintf(scanBuf, sizeof(scanBuf), "http://%d.%d.%d.%d:8000/api/edges",
+      snprintf(scanBuf, sizeof(scanBuf), "http://%d.%d.%d.%d:8000/api/status",
                localIP[0], localIP[1], localIP[2], scanI);
       scanHttp.begin(scanBuf);
       scanHttp.setTimeout(300);
@@ -551,10 +589,10 @@ String getStatusJSON() {
   doc["hps_open"] = (phys_hps_tripped || fault_active[8] || fault_active[27]) ? 1 : 0;
   doc["defrost_sensor"] = fault_active[9] ? 1 : 0; 
   
-  doc["od_low_press"] = round((sim_od_low_press + low_noise) * 10.0) / 10.0;
-  doc["od_high_press"] = round((sim_od_high_press + high_noise) * 10.0) / 10.0;
-  doc["od_discharge_press"] = round((sim_od_high_press + high_noise) * 10.0) / 10.0;
-  doc["od_liquid_press"] = round((sim_od_liquid_press + liquid_noise) * 10.0) / 10.0; // Fixed: Broadcast separate liquid pressure channel variable over WebSockets
+  doc["od_low_press"] = round(sim_od_low_press * 10.0) / 10.0;
+  doc["od_high_press"] = round(sim_od_high_press * 10.0) / 10.0;
+  doc["od_discharge_press"] = round(sim_od_high_press * 10.0) / 10.0;
+  doc["od_liquid_press"] = round(sim_od_liquid_press * 10.0) / 10.0;
   doc["od_suction_temp"] = round(sim_od_suction_temp * 10.0) / 10.0;
   doc["od_liquid_temp"] = round(sim_od_liquid_temp * 10.0) / 10.0;
   doc["od_ambient"] = round(sim_od_ambient * 10.0) / 10.0;
@@ -958,7 +996,38 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   }
 
   const char* action = doc["action"];
-  if (action && strcmp(action, "reboot") == 0) {
+  if (action && strcmp(action, "set_ambient") == 0) {
+    if (!doc["od"].isNull()) set_od_temp = doc["od"].as<float>();
+    if (!doc["id"].isNull()) set_id_temp = doc["id"].as<float>();
+    if (!doc["rh"].isNull()) set_rh = doc["rh"].as<float>();
+    force_pressure_snap = true;
+    force_telemetry_update = true;
+  } else if (action && strcmp(action, "set_refrigerant") == 0) {
+    if (!doc["type"].isNull()) {
+      current_refrigerant = doc["type"].as<String>();
+      force_pressure_snap = true;
+      force_telemetry_update = true;
+    }
+  } else if (action && strcmp(action, "set_metering") == 0) {
+    if (!doc["id_txv"].isNull()) id_is_txv = doc["id_txv"].as<bool>();
+    if (!doc["od_txv"].isNull()) od_is_txv = doc["od_txv"].as<bool>();
+    force_pressure_snap = true;
+    force_telemetry_update = true;
+  } else if (action && strcmp(action, "set_settings") == 0) {
+    if (!doc["od"].isNull()) set_od_temp = doc["od"].as<float>();
+    if (!doc["id"].isNull()) set_id_temp = doc["id"].as<float>();
+    if (!doc["rh"].isNull()) set_rh = doc["rh"].as<float>();
+    if (!doc["refrigerant"].isNull()) current_refrigerant = doc["refrigerant"].as<String>();
+    if (!doc["id_txv"].isNull()) id_is_txv = doc["id_txv"].as<bool>();
+    if (!doc["od_txv"].isNull()) od_is_txv = doc["od_txv"].as<bool>();
+    if (!doc["is_b_type"].isNull()) is_b_type = doc["is_b_type"].as<bool>();
+    force_pressure_snap = true;
+    force_telemetry_update = true;
+  } else if (action && strcmp(action, "set_ob_preference") == 0) {
+    if (!doc["type"].isNull()) is_b_type = doc["type"].as<String>() == "B";
+    force_pressure_snap = true;
+    force_telemetry_update = true;
+  } else if (action && strcmp(action, "reboot") == 0) {
     Serial.println("Reboot command received via MQTT. Rebooting in 150ms.");
     pending_reboot = true;
     reboot_timer = millis() + 150;
@@ -971,6 +1040,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("BOOT: setup entered");
   // --- FIX: Determine identity FIRST, so all subsequent services get the right name ---
   detectTrainerTypeAtBoot();
   applyTrainerIdentityMetadata();
@@ -978,7 +1048,9 @@ void setup() {
   status_led.begin(); status_led.setBrightness(100);
   setStatusLeds(getModeConnectedLedColor());
 
+  Serial.println("BOOT: initializing BLE");
   setupBLE(); // Initialize BLE early to secure memory and RF coexistence before WiFi
+  Serial.println("BOOT: BLE initialized");
 
   if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
   initUserDatabase();
@@ -994,7 +1066,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
+  WiFi.setSleep(true);
 
   Serial.printf("WiFi attempting SSID: '%s'\n", wifi_ssid.c_str());
   setStatusLeds(status_led.Color(255, 180, 0)); // Yellow while connecting to Wi-Fi
@@ -1041,6 +1113,10 @@ void setup() {
 
     // --- MQTT SETUP ---
     mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
+    if (loadMqttCredentials()) {
+      mqttClient.setCredentials(mqtt_username.c_str(), mqtt_password.c_str());
+      Serial.println("MQTT credentials loaded from device storage.");
+    }
     IPAddress mqtt_host;
     String mqtt_host_str = engine_base_url;
     mqtt_host_str.replace("http://", "");
@@ -1368,6 +1444,34 @@ void setup() {
     request->send(200, "text/plain", "OK");
   });
 
+  server.on("/api/mqtt/credentials", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("username", true) ||
+        !request->hasParam("password", true)) {
+      request->send(400, "text/plain", "Username and password are required");
+      return;
+    }
+
+    String username = request->getParam("username", true)->value();
+    String password = request->getParam("password", true)->value();
+    username.trim();
+    if (username != EDGE_ID || password.length() < 20 || password.length() > 128) {
+      request->send(400, "text/plain", "Username must match this trainer ID and password must be 20-128 characters");
+      return;
+    }
+
+    if (!saveMqttCredentials(username, password)) {
+      request->send(500, "text/plain", "Failed to save MQTT credentials");
+      return;
+    }
+
+    mqttClient.setCredentials(mqtt_username.c_str(), mqtt_password.c_str());
+    if (WiFi.isConnected() && mqttReconnectTimer != nullptr) {
+      mqttClient.disconnect(true);
+      xTimerStart(mqttReconnectTimer, 0);
+    }
+    request->send(200, "text/plain", "MQTT credentials saved; reconnect scheduled");
+  });
+
   server.on("/api/identity", HTTP_GET, [](AsyncWebServerRequest *request){
     bool identity_pin_live_is_low = (digitalRead(PIN_IDENTITY) == LOW);
     bool reboot_required = (identity_pin_live_is_low != identity_pin_boot_is_low);
@@ -1659,11 +1763,14 @@ void sendEngineHeartbeat() {
     if (baseUrl.length() == 0) return false;
     HTTPClient http;
     String url = baseUrl + "/api/edge/heartbeat";
-    http.setTimeout(1200);
+    http.setTimeout(4000);
     if (!http.begin(url)) return false;
     http.addHeader("Content-Type", "application/json");
     int code = http.POST(payload);
     http.end();
+    if (code < 200 || code >= 300) {
+      Serial.printf("Engine heartbeat HTTP result %d at %s\n", code, baseUrl.c_str());
+    }
     return code >= 200 && code < 300;
   };
 
@@ -1685,10 +1792,42 @@ void sendEngineHeartbeat() {
   doc["ram"] = ESP.getFreeHeap();
   doc["uptime"] = uptime_str;
   doc["temp"] = 0.0;
+  doc["diagnosis"] = latest_diagnosis;
+  doc["student_score"] = student_score;
+  doc["work_history"] = work_history_log;
 
   // Add live identity pin status to notify UI if a reboot is needed after strap change.
   bool identity_pin_live_is_low = (digitalRead(PIN_IDENTITY) == LOW);
   doc["identity_reboot_required"] = (identity_pin_live_is_low != identity_pin_boot_is_low);
+
+  doc["refrigerant"] = current_refrigerant;
+  doc["is_defrosting"] = is_defrosting ? 1 : 0;
+  doc["indoor_metering"] = id_is_txv ? "TXV" : "Piston";
+  doc["outdoor_metering"] = od_is_txv ? "TXV" : "Piston";
+  doc["od_low_press"] = sim_od_low_press;
+  doc["od_liquid_press"] = sim_od_liquid_press;
+  doc["od_high_press"] = sim_od_high_press;
+  doc["od_suction_temp"] = sim_od_suction_temp;
+  doc["od_liquid_temp"] = sim_od_liquid_temp;
+  doc["id_suction_temp"] = sim_od_suction_temp + 1.2f;
+  doc["id_liquid_temp"] = sim_od_liquid_temp - 1.2f;
+  doc["od_ambient"] = sim_od_ambient;
+  doc["id_return_temp"] = sim_id_return_temp;
+  doc["id_supply_temp"] = sim_id_supply_temp;
+  doc["id_rh"] = sim_id_rh;
+  doc["comp_amps"] = sim_comp_amps;
+  doc["od_fan_amps"] = sim_od_fan_amps;
+  doc["id_fan_amps"] = sim_id_fan_amps;
+  doc["hs_amps"] = sim_hs_amps;
+
+  JsonDocument trainer_status;
+  if (!deserializeJson(trainer_status, getStatusJSON())) {
+    for (JsonPairConst field : trainer_status.as<JsonObjectConst>()) {
+      if (strcmp(field.key().c_str(), "clients") != 0) {
+        doc[field.key()] = field.value();
+      }
+    }
+  }
 
   String payload;
   serializeJson(doc, payload);
@@ -1798,15 +1937,25 @@ void handle_telemetry() {
   if (now < telemetry_timer) return;
   telemetry_timer = now + current_interval; 
 
-  float ref_mult = 1.0; 
-  if (current_refrigerant == "R22") ref_mult = 0.60;
-  else if (current_refrigerant == "R32") ref_mult = 1.04;
-  else if (current_refrigerant == "R454B") ref_mult = 0.98;
-  else if (current_refrigerant == "R134a") ref_mult = 0.40;
-  else if (current_refrigerant == "R404A") ref_mult = 0.75;
-  else if (current_refrigerant == "R407C") ref_mult = 0.65;
-
-  float target_eq_press = (145.0 + ((set_od_temp - 70.0) * 1.5)) * ref_mult; 
+  float target_eq_press = 145.0f;
+  const float equalized_temp_f = (set_od_temp + set_id_temp) * 0.5f;
+  refrigerant_pressure::meanSaturationPressurePsig(
+    current_refrigerant, equalized_temp_f, target_eq_press
+  );
+  auto pressureAtSaturation = [&](float temperatureF, bool dewPoint, float fallback) {
+    float pressure = fallback;
+    refrigerant_pressure::saturationPressurePsig(
+      current_refrigerant, temperatureF, dewPoint, pressure
+    );
+    return pressure;
+  };
+  auto temperatureAtSaturation = [&](float pressure, bool dewPoint, float fallback) {
+    float temperature = fallback;
+    refrigerant_pressure::saturationTemperatureF(
+      current_refrigerant, pressure, dewPoint, temperature
+    );
+    return temperature;
+  };
 
   // --- PRESSURE SWITCH THRESHOLDS ---
   float lps_trip = 40.0; float lps_reset = 80.0;
@@ -1891,6 +2040,8 @@ void handle_telemetry() {
   float target_low = sim_od_low_press;
   float target_high = sim_od_high_press;
   float target_sh = 12.0;
+  float evaporating_sat_temp_f = set_id_temp - 35.0f;
+  float condensing_sat_temp_f = set_od_temp + 20.0f;
 
   float rh_variance = (set_rh - 50.0) / 10.0; 
   float latent_heat_penalty = (rh_variance > 0) ? (rh_variance * 1.5) : (rh_variance * 1.0);
@@ -1911,21 +2062,23 @@ void handle_telemetry() {
     target_supply = set_id_temp + heat_boost; 
     
   } else if (phys_cooling) {
-    target_high = ((set_od_temp * 3.5f) + 50.0f) * ref_mult; 
-    float txv_shift = id_is_txv ? 1.0f : 0.0f;
-    target_low = ((set_id_temp * 2.0f) - 30.0f + (latent_pressure_penalty * txv_shift)) * ref_mult;   
+    evaporating_sat_temp_f = set_id_temp - (id_is_txv ? 35.0f : 40.0f) +
+                             latent_pressure_penalty * (id_is_txv ? 0.5f : 0.3f);
+    condensing_sat_temp_f = set_od_temp + 20.0f;
+    target_low = pressureAtSaturation(evaporating_sat_temp_f, true, 122.0f);
+    target_high = pressureAtSaturation(condensing_sat_temp_f, false, 340.0f);
     target_sh = id_is_txv ? 12.0f : ((set_id_temp - set_od_temp + 30.0f) + (latent_heat_penalty * 2.0f));
 
     line_friction_delta = od_fan_fail ? 8.0f : 18.0f; 
 
-    if (fault_non_condensables) { target_high += 130.0f * ref_mult; target_low += 5.0f * ref_mult; line_friction_delta += 10.0f; }
-    if (fault_stuck_id_txv) { target_low += 25.0f * ref_mult; target_high -= 30.0f * ref_mult; target_sh = 0.5f; }
-    if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f * ref_mult; target_high -= 15.0f * ref_mult; target_sh = 35.0f; }
-    if (fault_comp_bypass) { target_low += 40.0f * ref_mult; target_high -= 75.0f * ref_mult; }
-    if (fault_inefficient_comp) { target_low += 25.0f * ref_mult; target_high -= 45.0f * ref_mult; }
-    if (fault_rv_bypass) { target_low += 50.0f * ref_mult; target_high -= 80.0f * ref_mult; target_sh += 15.0f; }
-    if (fault_low_id_cfm) { target_low -= 20.0f * ref_mult; target_sh = 2.0f; target_supply -= 12.0f; line_friction_delta -= 6.0f; }
-    if (fault_high_id_cfm) { target_low += 15.0f * ref_mult; target_sh += 15.0f; target_supply += 8.0f; line_friction_delta += 5.0f; }
+    if (fault_non_condensables) { target_high += 130.0f; target_low += 5.0f; line_friction_delta += 10.0f; }
+    if (fault_stuck_id_txv) { target_low += 25.0f; target_high -= 30.0f; target_sh = 0.5f; }
+    if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
+    if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
+    if (fault_inefficient_comp) { target_low += 25.0f; target_high -= 45.0f; }
+    if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
+    if (fault_low_id_cfm) { target_low -= 20.0f; target_sh = 2.0f; target_supply -= 12.0f; line_friction_delta -= 6.0f; }
+    if (fault_high_id_cfm) { target_low += 15.0f; target_sh += 15.0f; target_supply += 8.0f; line_friction_delta += 5.0f; }
 
     float low_abs = sim_od_low_press + 14.7f;
     if (low_abs < 1.0f) low_abs = 1.0f;
@@ -1933,15 +2086,23 @@ void handle_telemetry() {
     float vol_eff_penalty = (comp_ratio - 2.5f) * 4.0f; 
     if (vol_eff_penalty < 0.0f) vol_eff_penalty = 0.0f;
 
-    target_low += vol_eff_penalty * ref_mult; 
+    target_low += vol_eff_penalty;
     
-    if (od_fan_fail) target_high = 600.0f * ref_mult; 
-    if (id_fan_fail) { target_low = 20.0f * ref_mult; line_friction_delta = 2.0f; }   
+    if (od_fan_fail) {
+      condensing_sat_temp_f = set_od_temp + 50.0f;
+      target_high = pressureAtSaturation(condensing_sat_temp_f, false, 600.0f);
+    }
+    if (id_fan_fail) {
+      evaporating_sat_temp_f = set_id_temp - 55.0f;
+      target_low = pressureAtSaturation(evaporating_sat_temp_f, true, 20.0f);
+      line_friction_delta = 2.0f;
+    }
 
-    float estimated_low_sat = (target_low / ref_mult) * 0.3f + 10.0f; 
-    sim_od_suction_temp = add_noise(estimated_low_sat + target_sh, 0.4f);  
-    sim_od_liquid_temp = add_noise(set_od_temp + 10.0f, 0.4f);  
-    sim_od_discharge = add_noise(sim_od_suction_temp + (comp_ratio * 20.0f) + 45.0f + vol_eff_penalty, 2.0f);
+    evaporating_sat_temp_f = temperatureAtSaturation(target_low, true, evaporating_sat_temp_f);
+    condensing_sat_temp_f = temperatureAtSaturation(target_high, false, condensing_sat_temp_f);
+    sim_od_suction_temp = add_noise(evaporating_sat_temp_f + target_sh, 0.4f);
+    sim_od_liquid_temp = add_noise(condensing_sat_temp_f - 10.0f, 0.4f);
+    sim_od_discharge = add_noise(condensing_sat_temp_f + 35.0f + vol_eff_penalty, 2.0f);
     target_supply = (set_id_temp - 20.0f) + heat_boost + latent_heat_penalty; 
 
     if (fault_comp_bypass) sim_od_suction_temp += 35.0f; 
@@ -1953,23 +2114,26 @@ void handle_telemetry() {
     if (id_fan_fail) sim_od_suction_temp = add_noise(25.0f, 0.5f); 
 
   } else if (phys_heating) {
-    target_low = ((set_od_temp * 1.8f) + 25.0f) * ref_mult;   
-    float base_head = (set_id_temp * 3.0f) + (set_od_temp * 1.5f) + 50.0f;
+    evaporating_sat_temp_f = set_od_temp - 25.0f;
+    condensing_sat_temp_f = set_id_temp + 20.0f;
+    target_low = pressureAtSaturation(evaporating_sat_temp_f, true, 122.0f);
+    target_high = pressureAtSaturation(condensing_sat_temp_f, false, 340.0f);
     float extreme_ambient_penalty = 0.0f;
     if (set_od_temp > 65.0f) { float excess = set_od_temp - 65.0f; extreme_ambient_penalty = (excess * excess * 1.2f); }
-    target_high = (base_head + extreme_ambient_penalty) * ref_mult;  
+    condensing_sat_temp_f += min(extreme_ambient_penalty * 0.01f, 8.0f);
+    target_high = pressureAtSaturation(condensing_sat_temp_f, false, target_high);
     target_sh = od_is_txv ? 10.0f : 15.0f;
 
     line_friction_delta = id_fan_fail ? 7.0f : 24.0f; 
 
-    if (fault_non_condensables) { target_high += 130.0f * ref_mult; target_low += 5.0f * ref_mult; line_friction_delta += 12.0f; }
-    if (fault_stuck_od_txv) { target_low -= 35.0f * ref_mult; target_high -= 15.0f * ref_mult; target_sh = 35.0f; }
-    if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f * ref_mult; target_high -= 15.0f * ref_mult; target_sh = 35.0f; }
-    if (fault_comp_bypass) { target_low += 40.0f * ref_mult; target_high -= 75.0f * ref_mult; }
-    if (fault_inefficient_comp) { target_low += 25.0f * ref_mult; target_high -= 45.0f * ref_mult; }
-    if (fault_rv_bypass) { target_low += 50.0f * ref_mult; target_high -= 80.0f * ref_mult; target_sh += 15.0f; }
-    if (fault_low_id_cfm) { target_high += 55.0f * ref_mult; target_supply += 18.0f; line_friction_delta += 10.0f; } 
-    if (fault_high_id_cfm) { target_high -= 25.0f * ref_mult; target_supply -= 9.0f; line_friction_delta -= 6.0f; }
+    if (fault_non_condensables) { target_high += 130.0f; target_low += 5.0f; line_friction_delta += 12.0f; }
+    if (fault_stuck_od_txv) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
+    if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
+    if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
+    if (fault_inefficient_comp) { target_low += 25.0f; target_high -= 45.0f; }
+    if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
+    if (fault_low_id_cfm) { target_high += 55.0f; target_supply += 18.0f; line_friction_delta += 10.0f; }
+    if (fault_high_id_cfm) { target_high -= 25.0f; target_supply -= 9.0f; line_friction_delta -= 6.0f; }
 
     float low_abs = sim_od_low_press + 14.7f;
     if (low_abs < 1.0f) low_abs = 1.0f;
@@ -1977,15 +2141,22 @@ void handle_telemetry() {
     float vol_eff_penalty = (comp_ratio - 2.5f) * 4.0f; 
     if (vol_eff_penalty < 0.0f) vol_eff_penalty = 0.0f;
 
-    target_low += vol_eff_penalty * ref_mult; 
+    target_low += vol_eff_penalty;
     
-    if (od_fan_fail) target_low = 20.0f * ref_mult;   
-    if (id_fan_fail) target_high = 650.0f * ref_mult; 
+    if (od_fan_fail) {
+      evaporating_sat_temp_f = set_od_temp - 55.0f;
+      target_low = pressureAtSaturation(evaporating_sat_temp_f, true, 20.0f);
+    }
+    if (id_fan_fail) {
+      condensing_sat_temp_f = set_id_temp + 50.0f;
+      target_high = pressureAtSaturation(condensing_sat_temp_f, false, 650.0f);
+    }
 
-    float estimated_low_sat = (target_low / ref_mult) * 0.3f + 10.0f; 
-    sim_od_suction_temp = add_noise(estimated_low_sat + target_sh, 0.4f);  
-    sim_od_liquid_temp = add_noise(set_id_temp + 12.0f + (extreme_ambient_penalty * 0.05f), 0.4f);  
-    sim_od_discharge = add_noise(sim_od_suction_temp + (comp_ratio * 24.0f) + 55.0f + extreme_ambient_penalty + vol_eff_penalty, 2.0f);
+    evaporating_sat_temp_f = temperatureAtSaturation(target_low, true, evaporating_sat_temp_f);
+    condensing_sat_temp_f = temperatureAtSaturation(target_high, false, condensing_sat_temp_f);
+    sim_od_suction_temp = add_noise(evaporating_sat_temp_f + target_sh, 0.4f);
+    sim_od_liquid_temp = add_noise(condensing_sat_temp_f - 12.0f, 0.4f);
+    sim_od_discharge = add_noise(condensing_sat_temp_f + 35.0f + vol_eff_penalty, 2.0f);
     target_supply = (set_id_temp + 27.0f) + heat_boost + (extreme_ambient_penalty * 0.1f); 
 
     if (fault_comp_bypass) sim_od_suction_temp += 35.0f; 
@@ -2000,7 +2171,7 @@ void handle_telemetry() {
   if (force_pressure_snap && is_compressor) {
       sim_od_low_press = target_low;
       sim_od_high_press = target_high;
-      sim_od_liquid_press = target_high - (line_friction_delta * 1.8f * ref_mult); 
+      sim_od_liquid_press = target_high - (line_friction_delta * 1.8f); 
       force_pressure_snap = false; 
   } else if (is_compressor) {
       // Discharge pressure (high_press) reacts quickly to compressor strokes
@@ -2008,7 +2179,7 @@ void handle_telemetry() {
       sim_od_high_press += (target_high - sim_od_high_press) * 0.12f; 
       
       // Liquid line pressure is damped/delayed by the condenser volume
-      float true_liquid_target = target_high - (line_friction_delta * 1.8f * ref_mult);
+      float true_liquid_target = target_high - (line_friction_delta * 1.8f);
       sim_od_liquid_press += (true_liquid_target - sim_od_liquid_press) * 0.035f; 
   } else {
       sim_od_liquid_press += (target_high - sim_od_liquid_press) * 0.02f; // Equalize back to static
@@ -2032,7 +2203,7 @@ void handle_telemetry() {
       } else if (now - comp_start_time < 400) {
           sim_comp_amps = 143.0f; 
       } else {
-          sim_comp_amps = 10.0f + ((sim_od_high_press / ref_mult) * 0.035f);
+          sim_comp_amps = 10.0f + (sim_od_high_press * 0.035f);
           if (fault_comp_bypass) sim_comp_amps -= 6.5f; 
           if (fault_inefficient_comp) sim_comp_amps -= 4.0f;
           sim_comp_amps = add_noise(sim_comp_amps, 0.2f);

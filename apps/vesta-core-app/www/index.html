@@ -1685,10 +1685,17 @@
             );
           }
         }
+        const trainerType = (data.trainer_type || "").toLowerCase();
+        const isFurnace =
+          trainerType === "straight_ac_furnace" || trainerType === "ac_gas";
+        const isHeatPump = trainerType === "heat_pump";
+        const coolingActive = data.y_call && !data.is_defrosting;
         document.getElementById("mode_ac").style.display =
-          data.y_call && data.o_call && !data.is_defrosting ? "inline" : "none";
+          coolingActive && (isFurnace || (!trainerType && data.o_call))
+            ? "inline"
+            : "none";
         document.getElementById("mode_hp").style.display =
-          data.y_call && !data.o_call && !data.is_defrosting
+          coolingActive && (isHeatPump || (!trainerType && !data.o_call))
             ? "inline"
             : "none";
 
@@ -1843,7 +1850,13 @@
           `${getApiBaseUrl()}/api/submit?diagnosis=${encodeURIComponent(a)}`,
           { method: "POST", headers: getApiAuthHeaders() },
         )
-          .then((r) => r.text())
+          .then(async (response) => {
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(text || `Request failed (${response.status})`);
+            }
+            return text;
+          })
           .then((text) => {
             if (text === "CORRECT") {
               showResultPopup(
@@ -1860,6 +1873,9 @@
             } else {
               alert("Transmitted Securely.");
             }
+          })
+          .catch((error) => {
+            alert(`Unable to submit answer: ${error.message}`);
           });
       }
 

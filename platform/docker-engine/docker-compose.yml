@@ -6,6 +6,9 @@ services:
     environment:
       - EDGE_REQUIRED=true
       - MQTT_HOST=mqtt
+      - MQTT_USERNAME=${MQTT_ENGINE_USERNAME:?Run tools/setup-mqtt-auth.ps1 first}
+      - MQTT_PASSWORD=${MQTT_ENGINE_PASSWORD:?Run tools/setup-mqtt-auth.ps1 first}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:8080,http://127.0.0.1:8080}
       - USERS_DB_FILE=/data/users.json
       - EDGES_DB_FILE=/data/edges.json
     volumes:
@@ -40,6 +43,9 @@ services:
   mqtt:
     image: eclipse-mosquitto:2
     container_name: mqtt
+    environment:
+      - MQTT_HEALTHCHECK_USERNAME=${MQTT_ENGINE_USERNAME:?Run tools/setup-mqtt-auth.ps1 first}
+      - MQTT_HEALTHCHECK_PASSWORD=${MQTT_ENGINE_PASSWORD:?Run tools/setup-mqtt-auth.ps1 first}
     ports:
       - "1883:1883"
       - "9001:9001"
@@ -48,16 +54,12 @@ services:
       - ./mosquitto/data:/mosquitto/data
     healthcheck:
       test:
-        - CMD
-        - mosquitto_sub
-        - -h
-        - 127.0.0.1
-        - -t
-        - "$$SYS/broker/version"
-        - -C
-        - "1"
-        - -W
-        - "5"
+        - CMD-SHELL
+        - >-
+          mosquitto_sub -h 127.0.0.1
+          -u "$$MQTT_HEALTHCHECK_USERNAME"
+          -P "$$MQTT_HEALTHCHECK_PASSWORD"
+          -t '$$SYS/broker/version' -C 1 -W 5
       interval: 15s
       timeout: 7s
       retries: 5
