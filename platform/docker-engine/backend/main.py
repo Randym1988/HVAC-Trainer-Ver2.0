@@ -736,8 +736,15 @@ async def simulation_loop():
         # ==================================
         # 1. READ FAULT STATES
         # ==================================
-        id_fan_fail = state.fault_active[24] or state.sim_active[1]
-        od_fan_fail = state.fault_active[6] or state.sim_active[3]
+        id_fan_fail = (
+            state.fault_active[24]
+            or state.sim_active[1]
+            or state.sim_active[2]
+            or state.sim_active[6]
+        )
+        od_fan_fail = (
+            state.fault_active[6] or state.sim_active[3] or state.sim_active[4]
+        )
 
         fault_non_condensables = state.fault_active[40]
         fault_stuck_id_txv = state.fault_active[41]
@@ -920,7 +927,7 @@ async def simulation_loop():
             if od_fan_fail:
                 target_high = 600.0 * ref_mult
             if id_fan_fail:
-                target_low = 20.0 * ref_mult
+                target_low = lps_trip * 0.75
                 line_friction_delta = 2.0
 
             estimated_low_sat = (target_low / ref_mult) * 0.3 + 10.0

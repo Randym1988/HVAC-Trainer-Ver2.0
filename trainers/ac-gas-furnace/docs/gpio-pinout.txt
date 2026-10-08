@@ -54,6 +54,7 @@ P0:  Inducer Draft Motor Relay
 P1:  Hot Surface Igniter Relay
 P2:  Main Gas Valve Relay
 P3:  Indoor Blower Motor Relay (for Heat)
+# (P8/P9/P11/P12 follow the Y call in furnace mode; P8 stays off for sim 15.)
 P8:  Compressor Motor Relay (AC)
 P9:  Compressor Contactor Relay (AC)
 P11: Condenser 'Y' Signal Path Relay (AC)

@@ -2489,12 +2489,31 @@ void runFurnaceControlSlice() {
   furnace_controller.update(current_w, furnace_physics.getIdSupplyTemp());
   furnace_physics.setAmbient(set_od_temp, set_id_temp, set_rh);
   furnace_physics.setRefrigerant(current_refrigerant, id_is_txv);
-  // Portal blower-fault simulations (1, 2, 6) must reach the engine like fault 24.
+  // Portal simulations must reach the engine like their equivalent faults:
+  // blower (1, 2, 6) -> f24, outdoor fan (3, 4) -> f6, compressor overload (15) -> f31.
   bool furnace_faults[57];
   memcpy(furnace_faults, fault_active, sizeof(furnace_faults));
   if (sim_active[1] || sim_active[2] || sim_active[6]) furnace_faults[24] = true;
-  furnace_physics.update(current_y, gas_valve_active, current_g, blower_running, furnace_faults);
+  if (sim_active[3] || sim_active[4]) furnace_faults[6] = true;
+  if (sim_active[15]) furnace_faults[31] = true;
+  // f30 (shorted contactor) pulls the compressor in without a Y call.
+  const bool compressor_call = current_y || fault_active[30];
+  furnace_physics.update(compressor_call, gas_valve_active, current_g, blower_running, furnace_faults);
   syncFurnaceTelemetryToUnifiedState();
+
+  // AC-path relays on Board 2 follow the Y call (same behavior as the heat-pump path).
+  if (i2c_boards_present) {
+    static int8_t last_ac_relay_state = -1;
+    const int8_t ac_relay_state = (current_y ? 1 : 0) | (sim_active[15] ? 2 : 0);
+    if (ac_relay_state != last_ac_relay_state) {
+      const int ac_level = current_y ? LOW : HIGH;
+      board_2.digitalWrite(12, ac_level);
+      board_2.digitalWrite(11, ac_level);
+      board_2.digitalWrite(9, ac_level);
+      board_2.digitalWrite(8, (current_y && !sim_active[15]) ? LOW : HIGH);
+      last_ac_relay_state = ac_relay_state;
+    }
+  }
 
   if (i2c_boards_present) {
     board_3.digitalWrite(6, (phys_lps_tripped || fault_active[7] || fault_active[26]) ? LOW : HIGH);
