@@ -127,7 +127,7 @@ bool phys_lps_tripped = false;
 bool phys_hps_tripped = false;
 
 bool sim_active[16] = {false};
-bool fault_active[55] = {false}; 
+bool fault_active[57] = {false}; 
 
 uint32_t sim_timer[16] = {0};   
 int sim_step[16] = {0};         
@@ -144,7 +144,7 @@ bool od_is_txv = true;
 bool is_b_type = false;
 
 // --- DYNAMIC AMBIENT SLIDERS ---
-float set_od_temp = 90.0;
+float set_od_temp = 95.0;
 float set_id_temp = 75.0;
 float set_rh = 50.0; 
 
@@ -153,7 +153,7 @@ float sim_od_high_press = 145.0;
 float sim_od_liquid_press = 145.0; // Fixed: Added raw float tracking variable for liquid gauge data stream
 float sim_od_suction_temp = 90.0;
 float sim_od_liquid_temp = 90.0;
-float sim_od_ambient = 90.0;
+float sim_od_ambient = 95.0;
 float sim_od_discharge = 90.0;
 
 float sim_id_ambient = 75.0; 
@@ -203,6 +203,7 @@ bool hb_last_lps = false;
 bool hb_last_hps = false;
 TaskHandle_t comm_task_handle = nullptr;
 TaskHandle_t control_task_handle = nullptr;
+TaskHandle_t heartbeat_task_handle = nullptr;
 bool dual_core_runtime_enabled = false;
 
 const uint32_t COMM_TASK_SLICE_MS = 5;
@@ -219,6 +220,7 @@ void runCommsSlice();
 void runControlSlice();
 void commTask(void* parameter);
 void controlTask(void* parameter);
+void heartbeatTask(void* parameter);
 uint32_t getModeConnectedLedColor();
 void connectToMqtt();
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total);
@@ -407,40 +409,6 @@ String discoverEngineBaseUrl(bool allowStored = true) {
     }
   }
 
-  // Scan the /24 subnet for a host responding on the public status endpoint.
-  IPAddress localIP = WiFi.localIP();
-  if (localIP != IPAddress(0, 0, 0, 0)) {
-    HTTPClient scanHttp;
-    char scanBuf[42];
-    for (int scanI = 1; scanI < 255; scanI++) {
-      if (scanI == localIP[3]) continue;
-      snprintf(scanBuf, sizeof(scanBuf), "http://%d.%d.%d.%d:8000/api/status",
-               localIP[0], localIP[1], localIP[2], scanI);
-      scanHttp.begin(scanBuf);
-      scanHttp.setTimeout(300);
-      int scanCode = scanHttp.GET();
-      scanHttp.end();
-      if (scanCode == 200) {
-        char scanBase[32];
-        snprintf(scanBase, sizeof(scanBase), "http://%d.%d.%d.%d:8000",
-                 localIP[0], localIP[1], localIP[2], scanI);
-        Serial.printf("Engine found via scan: %s\\n", scanBase);
-        return String(scanBase);
-      }
-    }
-    Serial.println("Engine not found on subnet.");
-  }
-
-  IPAddress gateway = WiFi.gatewayIP();
-  if (gateway != IPAddress(0, 0, 0, 0)) {
-    return "http://" + gateway.toString() + ":8000";
-  }
-
-  IPAddress dns = WiFi.dnsIP(0);
-  if (dns != IPAddress(0, 0, 0, 0)) {
-    return "http://" + dns.toString() + ":8000";
-  }
-
   return String();
 }
 
@@ -514,6 +482,8 @@ bool readDebounced(int pin, bool &stable_state, uint32_t &timer) {
 String getExpectedDiagnosis() {
   if (fault_active[46]) return "Low Indoor Airflow";
   if (fault_active[47]) return "High Indoor Airflow";
+  if (fault_active[55]) return "Low Refrigerant Charge";
+  if (fault_active[56]) return "Refrigerant Overcharge";
   if (fault_active[40]) return "Non-Condensables";
   if (fault_active[41]) return "Stuck Indoor TXV";
   if (fault_active[48]) return "Stuck Outdoor TXV";
@@ -532,7 +502,7 @@ String getExpectedDiagnosis() {
   if (sim_active[7]) return "Tripped Safety Limit";
 
   bool any_fault = false;
-  for(int i=0; i<55; i++) if(fault_active[i]) any_fault = true;
+  for(int i=0; i<57; i++) if(fault_active[i]) any_fault = true;
   for(int i=0; i<16; i++) if(sim_active[i]) any_fault = true;
   if (!any_fault) return "Normal Operation";
 
@@ -625,6 +595,14 @@ String getStatusJSON() {
   if (active_trainer_type == STRAIGHT_AC_FURNACE) {
     doc["furnace_cfm"] = round(furnace_physics.getSimulatedCfm() * 10.0f) / 10.0f;
     doc["furnace_static_pressure"] = round(furnace_physics.getStaticPressure() * 100.0f) / 100.0f;
+    doc["sat_suction_temp"] = round(furnace_physics.getSatSuctionTemp() * 10.0f) / 10.0f;
+    doc["sat_discharge_temp"] = round(furnace_physics.getSatDischargeTemp() * 10.0f) / 10.0f;
+    doc["superheat"] = round(furnace_physics.getSuperheat() * 10.0f) / 10.0f;
+    doc["subcooling"] = round(furnace_physics.getSubcooling() * 10.0f) / 10.0f;
+    doc["compressor_capacity_btu_per_hour"] = furnace_physics.getCompressorCapacityBtuPerHour();
+    doc["compressor_mass_flow_lb_per_hour"] = furnace_physics.getCompressorMassFlowLbPerHour();
+    doc["compressor_power_watts"] = furnace_physics.getCompressorPowerWatts();
+    doc["compressor_model"] = furnace_physics.getCompressorModelName();
     doc["furnace_telemetry_state"] = furnace_physics.getTelemetryState();
     doc["furnace_flame_active"] = furnace_physics.isFlameActive() ? 1 : 0;
     doc["furnace_blower_running"] = furnace_physics.isBlowerRunning() ? 1 : 0;
@@ -638,7 +616,7 @@ String getStatusJSON() {
     doc["furnace_state"] = furnace_controller.getFurnaceState();
   }
   // Export full fault/simulation bitfields so external instructor UIs can mirror every toggle state.
-  for (int faultIdx = 1; faultIdx < 55; faultIdx++) {
+  for (int faultIdx = 1; faultIdx < 57; faultIdx++) {
     char key[8];
     snprintf(key, sizeof(key), "f%d", faultIdx);
     doc[key] = fault_active[faultIdx] ? 1 : 0;
@@ -900,7 +878,7 @@ void reset_all_faults_and_sims() {
   last_comp_state = false;
 
   for(int i = 0; i < 16; i++) { sim_active[i] = false; sim_timer[i] = 0; sim_step[i] = 0; }
-  for(int i = 0; i < 55; i++) { fault_active[i] = false; } 
+  for(int i = 0; i < 57; i++) { fault_active[i] = false; } 
   
   limit_trip_count = 0;
 
@@ -910,6 +888,79 @@ void reset_all_faults_and_sims() {
   }
 
   reset_counter++;
+}
+
+void applySimulationToggle(int sim_num, bool enabled) {
+  if (sim_num < 1 || sim_num > 15) return;
+
+  sim_active[sim_num] = enabled;
+  sim_timer[sim_num] = 0;
+  sim_step[sim_num] = 0;
+  if (!enabled) {
+    if (sim_num == 1) { board_1.digitalWrite(12, HIGH); board_3.digitalWrite(6, HIGH); }
+    if (sim_num == 2) { board_1.digitalWrite(12, HIGH); board_1.digitalWrite(1, HIGH); board_1.digitalWrite(5, HIGH); board_1.digitalWrite(9, HIGH); }
+    if (sim_num == 3) { board_3.digitalWrite(5, HIGH); board_3.digitalWrite(7, HIGH); }
+    if (sim_num == 4) { board_3.digitalWrite(5, HIGH); board_3.digitalWrite(6, HIGH); }
+    if (sim_num == 5) { board_3.digitalWrite(11, HIGH); }
+    if (sim_num == 6) { board_1.digitalWrite(12, HIGH); }
+    if (sim_num == 7) { board_1.digitalWrite(2, HIGH); board_1.digitalWrite(6, HIGH); board_1.digitalWrite(10, HIGH); board_3.digitalWrite(7, HIGH); }
+    if (sim_num == 8) { board_1.digitalWrite(3, HIGH); }
+    if (sim_num == 9) { board_1.digitalWrite(7, HIGH); }
+    if (sim_num == 10) { board_1.digitalWrite(11, HIGH); }
+    if (sim_num == 13) { board_3.digitalWrite(11, HIGH); }
+    if (sim_num == 14) { board_2.digitalWrite(12, HIGH); }
+    if (sim_num == 15) { board_2.digitalWrite(14, HIGH); }
+  }
+  force_telemetry_update = true;
+}
+
+void applyFaultToggle(int fault, bool enabled) {
+  if (fault < 0 || fault >= 57) return;
+
+  fault_active[fault] = enabled;
+  const int inverted_value = enabled ? LOW : HIGH;
+  const int normal_value = enabled ? HIGH : LOW;
+  if (fault == 9) {
+    override_defrost_sensor = enabled ? 1 : 0;
+    board_3.digitalWrite(8, enabled ? LOW : HIGH);
+  } else {
+    switch (fault) {
+      case 15: board_1.digitalWrite(0, normal_value); break;
+      case 18: board_1.digitalWrite(1, inverted_value); break;
+      case 21: board_1.digitalWrite(2, inverted_value); break;
+      case 32: board_1.digitalWrite(3, inverted_value); break;
+      case 16: board_1.digitalWrite(4, normal_value); break;
+      case 19: board_1.digitalWrite(5, inverted_value); break;
+      case 22: board_1.digitalWrite(6, inverted_value); break;
+      case 33: board_1.digitalWrite(7, inverted_value); break;
+      case 17: board_1.digitalWrite(8, normal_value); break;
+      case 20: board_1.digitalWrite(9, inverted_value); break;
+      case 23: board_1.digitalWrite(10, inverted_value); break;
+      case 34: board_1.digitalWrite(11, inverted_value); break;
+      case 24: board_1.digitalWrite(12, inverted_value); break;
+      case 25: board_1.digitalWrite(13, inverted_value); break;
+      case 28: board_1.digitalWrite(14, inverted_value); break;
+      case 29: board_1.digitalWrite(15, inverted_value); break;
+      case 30: board_2.digitalWrite(13, inverted_value); break;
+      case 31: board_2.digitalWrite(14, inverted_value); break;
+      case 1: board_3.digitalWrite(0, inverted_value); break;
+      case 2: board_3.digitalWrite(1, inverted_value); break;
+      case 3: board_3.digitalWrite(2, inverted_value); break;
+      case 4: board_3.digitalWrite(3, inverted_value); break;
+      case 5: board_3.digitalWrite(4, inverted_value); break;
+      case 6: board_3.digitalWrite(5, inverted_value); break;
+      case 7: board_3.digitalWrite(6, inverted_value); break;
+      case 8: board_3.digitalWrite(7, inverted_value); break;
+      case 10: board_3.digitalWrite(9, inverted_value); break;
+      case 11: board_3.digitalWrite(10, inverted_value); break;
+      case 12: board_3.digitalWrite(11, inverted_value); break;
+      case 13: board_3.digitalWrite(12, inverted_value); break;
+      case 14: board_3.digitalWrite(13, inverted_value); break;
+      case 26: board_3.digitalWrite(14, inverted_value); break;
+      case 27: board_3.digitalWrite(15, inverted_value); break;
+    }
+  }
+  force_telemetry_update = true;
 }
 
 void logLogin(String username, String role) {
@@ -1027,6 +1078,14 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     if (!doc["type"].isNull()) is_b_type = doc["type"].as<String>() == "B";
     force_pressure_snap = true;
     force_telemetry_update = true;
+  } else if (action && strcmp(action, "toggle") == 0) {
+    String id = doc["id"].as<String>();
+    bool enabled = doc["state"].as<int>() == 1;
+    if (id.startsWith("sim_")) {
+      applySimulationToggle(id.substring(4).toInt(), enabled);
+    } else if (id.startsWith("f")) {
+      applyFaultToggle(id.substring(1).toInt(), enabled);
+    }
   } else if (action && strcmp(action, "reboot") == 0) {
     Serial.println("Reboot command received via MQTT. Rebooting in 150ms.");
     pending_reboot = true;
@@ -1595,68 +1654,10 @@ void setup() {
           work_history_log = "";
           latest_diagnosis = "None";
       } else if (id.startsWith("sim_")) {
-        int simNum = id.substring(4).toInt();
-        if (simNum >= 1 && simNum <= 15) { sim_active[simNum] = state; sim_timer[simNum] = 0; sim_step[simNum] = 0; 
-          if (!state) { 
-            if (simNum == 1) { board_1.digitalWrite(12, HIGH); board_3.digitalWrite(6, HIGH); } 
-            if (simNum == 2) { board_1.digitalWrite(12, HIGH); board_1.digitalWrite(1, HIGH); board_1.digitalWrite(5, HIGH); board_1.digitalWrite(9, HIGH); } 
-            if (simNum == 3) { board_3.digitalWrite(5, HIGH); board_3.digitalWrite(7, HIGH); } 
-            if (simNum == 4) { board_3.digitalWrite(5, HIGH); board_3.digitalWrite(6, HIGH); } 
-            if (simNum == 5) { board_3.digitalWrite(11, HIGH); } 
-            if (simNum == 6) { board_1.digitalWrite(12, HIGH); } 
-            if (simNum == 7) { board_1.digitalWrite(2, HIGH); board_1.digitalWrite(6, HIGH); board_1.digitalWrite(10, HIGH); board_3.digitalWrite(7, HIGH); } 
-            if (simNum == 8) { board_1.digitalWrite(3, HIGH); } 
-            if (simNum == 9) { board_1.digitalWrite(7, HIGH); }  
-            if (simNum == 10){ board_1.digitalWrite(11, HIGH); }  
-            if (simNum == 13){ board_3.digitalWrite(11, HIGH); } 
-            if (simNum == 14){ board_2.digitalWrite(12, HIGH); } 
-            if (simNum == 15){ board_2.digitalWrite(14, HIGH); } 
-          }
-        }
+        applySimulationToggle(id.substring(4).toInt(), state);
       } else if (id.startsWith("f")) {
         int f = id.substring(1).toInt();
-        if (f == 9) {
-            override_defrost_sensor = state ? 1 : 0;
-            fault_active[9] = state;
-            board_3.digitalWrite(8, state ? LOW : HIGH);
-        } else {
-            fault_active[f] = state; 
-            switch(f) {
-              case 15: board_1.digitalWrite(0, val_nor); break;
-              case 18: board_1.digitalWrite(1, val_inv); break;
-              case 21: board_1.digitalWrite(2, val_inv); break;
-              case 32: board_1.digitalWrite(3, val_inv); break;
-              case 16: board_1.digitalWrite(4, val_nor); break;
-              case 19: board_1.digitalWrite(5, val_inv); break;
-              case 22: board_1.digitalWrite(6, val_inv); break;
-              case 33: board_1.digitalWrite(7, val_inv); break;
-              case 17: board_1.digitalWrite(8, val_nor); break;
-              case 20: board_1.digitalWrite(9, val_inv); break;
-              case 23: board_1.digitalWrite(10, val_inv); break;
-              case 34: board_1.digitalWrite(11, val_inv); break;
-              case 24: board_1.digitalWrite(12, val_inv); break;
-              case 25: board_1.digitalWrite(13, val_inv); break;
-              case 28: board_1.digitalWrite(14, val_inv); break;
-              case 29: board_1.digitalWrite(15, val_inv); break;
-              case 30: board_2.digitalWrite(13, val_inv); break;
-              case 31: board_2.digitalWrite(14, val_inv); break;
-              case 1: board_3.digitalWrite(0, val_inv); break;
-              case 2: board_3.digitalWrite(1, val_inv); break;
-              case 3: board_3.digitalWrite(2, val_inv); break;
-              case 4: board_3.digitalWrite(3, val_inv); break;
-              case 5: board_3.digitalWrite(4, val_inv); break;
-              case 6: board_3.digitalWrite(5, val_inv); break;
-              case 7: board_3.digitalWrite(6, val_inv); break;
-              case 8: board_3.digitalWrite(7, val_inv); break;
-              case 10: board_3.digitalWrite(9, val_inv); break;
-              case 11: board_3.digitalWrite(10, val_inv); break;
-              case 12: board_3.digitalWrite(11, val_inv); break;
-              case 13: board_3.digitalWrite(12, val_inv); break;
-              case 14: board_3.digitalWrite(13, val_inv); break;
-              case 26: board_3.digitalWrite(14, val_inv); break;
-              case 27: board_3.digitalWrite(15, val_inv); break;
-            }
-        }
+        applyFaultToggle(f, state);
       } else {
         if (id == "hs1_t1") board_2.digitalWrite(0, val_inv); 
         else if (id == "hs1_t2") board_2.digitalWrite(1, val_inv); 
@@ -1732,6 +1733,19 @@ void setup() {
 
   dual_core_runtime_enabled = (comm_created == pdPASS && control_created == pdPASS);
   if (dual_core_runtime_enabled) {
+    BaseType_t heartbeat_created = xTaskCreatePinnedToCore(
+      heartbeatTask,
+      "heartbeat_task",
+      8192,
+      nullptr,
+      0,
+      &heartbeat_task_handle,
+      0
+    );
+    if (heartbeat_created != pdPASS) {
+      heartbeat_task_handle = nullptr;
+      Serial.println("Heartbeat worker creation failed; using communications slice fallback.");
+    }
     Serial.println("Dual-core runtime enabled: comm=core0, control=core1");
   } else {
     Serial.println("Dual-core task creation failed, using single-core loop fallback.");
@@ -1843,21 +1857,7 @@ void sendEngineHeartbeat() {
     return;
   }
 
-  String gatewayBase = "http://" + WiFi.gatewayIP().toString() + ":8000";
-  if (gatewayBase != engine_base_url && postHeartbeat(gatewayBase, payload)) {
-    engine_base_url = gatewayBase;
-    saveEngineBaseUrl(engine_base_url);
-    hb_last_w = state_w;
-    hb_last_y = state_y;
-    hb_last_o = state_o;
-    hb_last_g = state_g;
-    hb_last_lps = phys_lps_tripped;
-    hb_last_hps = phys_hps_tripped;
-    Serial.printf("Engine heartbeat switched to gateway endpoint: %s\n", engine_base_url.c_str());
-    return;
-  }
-
-  if (now >= next_engine_discovery_ms) {
+  if (engine_base_url.length() == 0 && now >= next_engine_discovery_ms) {
     String discoveredBase = discoverEngineBaseUrl(false);
     next_engine_discovery_ms = now + ENGINE_DISCOVERY_RETRY_MS;
     if (discoveredBase.length() > 0 && discoveredBase != engine_base_url && postHeartbeat(discoveredBase, payload)) {
@@ -2433,7 +2433,9 @@ void runCommsSlice() {
     notifyClients(true);
   }
 
-  sendEngineHeartbeat();
+  if (heartbeat_task_handle == nullptr) {
+    sendEngineHeartbeat();
+  }
   handle_system_health();
 }
 
@@ -2526,6 +2528,14 @@ void controlTask(void* parameter) {
   for (;;) {
     runControlSlice();
     vTaskDelay(pdMS_TO_TICKS(CONTROL_TASK_SLICE_MS));
+  }
+}
+
+void heartbeatTask(void* parameter) {
+  (void)parameter;
+  for (;;) {
+    sendEngineHeartbeat();
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 

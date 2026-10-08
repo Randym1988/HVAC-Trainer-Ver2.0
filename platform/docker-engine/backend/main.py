@@ -16,7 +16,6 @@ from fastapi import (
     Request,
     HTTPException,
     Response,
-    Depends,
     WebSocket,
     WebSocketDisconnect,
     Query,
@@ -24,7 +23,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Any
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from aiomqtt import Client as MQTTClient, MqttError
 
@@ -49,9 +48,9 @@ app.add_middleware(
 
 active_websockets = []
 # Global MQTT client placeholder (used for publishing from REST endpoints)
-mqtt_client: Optional[MQTTClient] = None
-simulation_task: Optional[asyncio.Task] = None
-mqtt_task: Optional[asyncio.Task] = None
+mqtt_client: MQTTClient | None = None
+simulation_task: asyncio.Task | None = None
+mqtt_task: asyncio.Task | None = None
 MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
 MQTT_USERNAME = os.getenv("MQTT_USERNAME") or None
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD") or None
@@ -65,7 +64,7 @@ MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
 mdns = None
 mdns_service_info = None
 USERS_DB_FILE = os.getenv("USERS_DB_FILE", "users.json")
-users_db: Dict[str, Dict[str, str]] = {}
+users_db: dict[str, dict[str, str]] = {}
 PBKDF2_ROUNDS = int(os.getenv("USER_PASSWORD_ROUNDS", "150000"))
 SESSION_COOKIE_NAME = "hvac_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -86,7 +85,7 @@ def hash_password(password: str) -> str:
     return f"pbkdf2_sha256${PBKDF2_ROUNDS}${salt}${digest}"
 
 
-def verify_password(submitted: str, record: Dict[str, str]) -> bool:
+def verify_password(submitted: str, record: dict[str, str]) -> bool:
     encoded = str(record.get("pw_hash", ""))
     if encoded.startswith("pbkdf2_sha256$"):
         try:
@@ -111,7 +110,7 @@ def write_json_atomically(file_path: str, data: Any) -> None:
     directory = os.path.dirname(os.path.abspath(file_path))
     filename = os.path.basename(file_path)
     os.makedirs(directory, exist_ok=True)
-    temporary_path: Optional[str] = None
+    temporary_path: str | None = None
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -135,7 +134,7 @@ def write_json_atomically(file_path: str, data: Any) -> None:
         raise
 
 
-def load_users_db() -> Dict[str, Dict[str, str]]:
+def load_users_db() -> dict[str, dict[str, str]]:
     if not os.path.exists(USERS_DB_FILE):
         write_json_atomically(USERS_DB_FILE, {})
         return {}
@@ -198,14 +197,14 @@ def format_trainer_label_from_edge_id(edge_id: str) -> str:
     return (edge_id or "").strip() or "Trainer"
 
 
-def sanitize_device_label(raw_label: Optional[str], edge_id: str) -> str:
+def sanitize_device_label(raw_label: str | None, edge_id: str) -> str:
     cleaned = str(raw_label or "").replace("\x00", "").strip()
     if cleaned:
         return cleaned
     return format_trainer_label_from_edge_id(edge_id)
 
 
-def load_edges_db() -> Dict[str, Dict[str, Any]]:
+def load_edges_db() -> dict[str, dict[str, Any]]:
     try:
         if not os.path.exists(EDGES_DB_FILE):
             return {}
@@ -214,7 +213,7 @@ def load_edges_db() -> Dict[str, Dict[str, Any]]:
         if not isinstance(loaded, dict):
             raise ValueError("database root must be a JSON object")
 
-        restored: Dict[str, Dict[str, Any]] = {}
+        restored: dict[str, dict[str, Any]] = {}
         for edge_id, edge in loaded.items():
             if not isinstance(edge, dict):
                 continue
@@ -271,7 +270,7 @@ def save_edges_db(force: bool = False) -> None:
     if not force and (now - _last_edges_save_at) < EDGES_SAVE_INTERVAL_SECONDS:
         return
 
-    serializable: Dict[str, Dict[str, Any]] = {}
+    serializable: dict[str, dict[str, Any]] = {}
     for edge_id, edge in state.edges.items():
         if not isinstance(edge, dict):
             continue
@@ -357,8 +356,8 @@ class AppState:
         self.edge_timeout_seconds = EDGE_TIMEOUT_SECONDS
         self.ws_last_broadcast = 0.0
         self.trainer_type = "ac_gas"
-        self.selected_edge_id: Optional[str] = None
-        self.edges: Dict[str, Dict[str, Any]] = {}
+        self.selected_edge_id: str | None = None
+        self.edges: dict[str, dict[str, Any]] = {}
 
         # Timers & States
         self.furnace_state = "FURNACE_IDLE"
@@ -397,7 +396,7 @@ class AppState:
         self.force_pressure_snap = False
 
         self.sim_active = [False] * 16
-        self.fault_active = [False] * 55
+        self.fault_active = [False] * 57
 
         # Refrigerant
         self.current_refrigerant = "R410A"
@@ -405,7 +404,7 @@ class AppState:
         self.od_is_txv = True
 
         # Ambient / Environment defaults
-        self.set_od_temp = 90.0
+        self.set_od_temp = 95.0
         self.set_id_temp = 75.0
         self.set_rh = 50.0
 
@@ -415,7 +414,7 @@ class AppState:
         self.sim_od_suction_temp = 90.0
         self.sim_od_liquid_temp = 90.0
         self.sim_od_discharge = 90.0
-        self.sim_od_ambient = 90.0
+        self.sim_od_ambient = 95.0
 
         self.sim_id_ambient = 75.0
         self.sim_id_return_temp = 75.0
@@ -434,7 +433,7 @@ class AppState:
 
     def reset_all_faults_and_sims(self):
         self.sim_active = [False] * 16
-        self.fault_active = [False] * 55
+        self.fault_active = [False] * 57
         self.force_defrost = False
         self.furnace_state = "FURNACE_IDLE"
         self.active_scenario = 0
@@ -462,12 +461,12 @@ RUNTIME_EXCLUDED = {
 }
 
 
-def default_runtime() -> Dict[str, Any]:
+def default_runtime() -> dict[str, Any]:
     base = AppState()
     return {k: v for k, v in base.__dict__.items() if k not in RUNTIME_EXCLUDED}
 
 
-def ensure_edge_runtime(edge: Dict[str, Any]) -> Dict[str, Any]:
+def ensure_edge_runtime(edge: dict[str, Any]) -> dict[str, Any]:
     runtime = edge.get("runtime")
     if not isinstance(runtime, dict):
         runtime = default_runtime()
@@ -475,13 +474,13 @@ def ensure_edge_runtime(edge: Dict[str, Any]) -> Dict[str, Any]:
     return runtime
 
 
-def apply_runtime_to_state(runtime: Dict[str, Any]) -> None:
+def apply_runtime_to_state(runtime: dict[str, Any]) -> None:
     for k, v in runtime.items():
         if hasattr(state, k):
             setattr(state, k, v)
 
 
-def save_state_to_runtime(runtime: Dict[str, Any]) -> None:
+def save_state_to_runtime(runtime: dict[str, Any]) -> None:
     for key in list(runtime.keys()):
         if hasattr(state, key):
             runtime[key] = getattr(state, key)
@@ -498,7 +497,7 @@ def persist_selected_runtime() -> None:
     selected["work_history"] = state.work_history_log
 
 
-def normalize_trainer_type(value: Optional[str]) -> str:
+def normalize_trainer_type(value: str | None) -> str:
     incoming = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
     if incoming in {"heat_pump", "heatpump", "hp"}:
         return "heat_pump"
@@ -511,7 +510,7 @@ def get_edge_connected(last_seen: float) -> bool:
     return (time.time() - last_seen) <= state.edge_timeout_seconds
 
 
-def get_selected_edge() -> Optional[Dict[str, Any]]:
+def get_selected_edge() -> dict[str, Any] | None:
     if not state.selected_edge_id:
         return None
     return state.edges.get(state.selected_edge_id)
@@ -546,9 +545,9 @@ def sync_selected_edge_into_state() -> None:
     runtime["phys_hps_tripped"] = state.phys_hps_tripped
 
 
-def get_edges_payload() -> List[Dict[str, Any]]:
+def get_edges_payload() -> list[dict[str, Any]]:
     now = time.time()
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for edge_id, edge in state.edges.items():
         last_seen = float(edge.get("last_seen", 0.0))
         age_seconds = max(0.0, now - last_seen)
@@ -581,7 +580,7 @@ def get_edges_payload() -> List[Dict[str, Any]]:
     return rows
 
 
-def maybe_select_edge(edge_id: Optional[str]) -> None:
+def maybe_select_edge(edge_id: str | None) -> None:
     if edge_id is None:
         return
     candidate = edge_id.strip()
@@ -618,6 +617,41 @@ def get_refrigerant_multiplier(refrigerant: str) -> float:
     if refrigerant == "R407C":
         return 0.65
     return 1.0
+
+
+# Time constants (seconds) matched to the previous per-tick multipliers at a 0.2 s tick.
+HIGH_PRESS_TC = 3.0
+LOW_PRESS_TC = 4.0
+LIQUID_PRESS_TC = 10.0
+LIQUID_PRESS_IDLE_TC = 15.0
+THERMAL_MASS_TC = 15.0
+
+
+def smooth_alpha(dt: float, time_constant: float) -> float:
+    return 1.0 - math.exp(-max(dt, 0.0) / max(time_constant, 0.1))
+
+
+def dew_point_f(dry_bulb_f: float, rh_percent: float) -> float:
+    # Magnus-Tetens
+    a, b = 17.62, 243.12
+    t_c = (dry_bulb_f - 32.0) / 1.8
+    rh = min(max(rh_percent, 1.0), 100.0)
+    gamma = math.log(rh / 100.0) + (a * t_c) / (b + t_c)
+    td_c = (b * gamma) / max(a - gamma, 0.01)
+    return td_c * 1.8 + 32.0
+
+
+def sat_temp_f(press_psig: float, ref_mult: float) -> float:
+    # R-410A Clausius-Clapeyron fit; other refrigerants are normalised via ref_mult.
+    p_abs = max(press_psig / max(ref_mult, 0.1), 0.0) + 14.7
+    denom = max(13.444 - math.log(max(p_abs, 1.0)), 0.1)
+    return 4275.0 / denom - 459.67
+
+
+def compressor_amps(t_cond: float, t_evap: float) -> float:
+    # ~13 A at 110 F cond / 41 F evap (90 F OD, 75 F ID, R-410A).
+    amps = 4.4 + (0.06 * t_cond) - (0.05 * t_evap) + (0.0009 * t_cond * t_evap)
+    return min(max(amps, 3.0), 40.0)
 
 
 def get_pressure_switch_thresholds(refrigerant: str):
@@ -660,7 +694,7 @@ async def simulation_loop():
         elapsed_seconds = min(max(tick_time - last_tick, 0.0), 1.0)
         last_tick = tick_time
         now = time.time()
-        sim_edge: Optional[Dict[str, Any]] = None
+        sim_edge: dict[str, Any] | None = None
         if state.edges:
             edge_ids = sorted(state.edges.keys())
             if state.simulation_cursor >= len(edge_ids):
@@ -673,6 +707,13 @@ async def simulation_loop():
                 apply_runtime_to_state(runtime)
                 state.edge_last_seen = sim_edge.get("last_seen", 0.0)
                 state.edge_connected = get_edge_connected(state.edge_last_seen)
+                if not state.edge_connected:
+                    # Offline trainer must not resume with stale thermostat calls.
+                    for key in ("w", "y", "g", "o", "o_call"):
+                        if key in sim_edge:
+                            sim_edge[key] = False
+                    for key in ("state_w", "state_y", "state_g"):
+                        runtime[key] = False
                 state.trainer_type = sim_edge.get("trainer_type", "ac_gas")
                 state.state_w = bool(sim_edge.get("w", state.state_w))
                 state.state_y = bool(sim_edge.get("y", state.state_y))
@@ -725,6 +766,12 @@ async def simulation_loop():
         line_friction_delta = 0.0
         ref_mult = get_refrigerant_multiplier(state.current_refrigerant)
         target_eq_press = (145.0 + ((state.set_od_temp - 70.0) * 1.5)) * ref_mult
+        prev_temps = (
+            state.sim_od_suction_temp,
+            state.sim_od_liquid_temp,
+            state.sim_od_discharge,
+        )
+        thermal_alpha = smooth_alpha(elapsed_seconds, THERMAL_MASS_TC)
 
         # Pressure switch model (mirrors firmware behavior)
         lps_trip, lps_reset, hps_trip, hps_reset = get_pressure_switch_thresholds(
@@ -794,7 +841,8 @@ async def simulation_loop():
         if not is_compressor:
             target_low = target_eq_press
             target_high = target_eq_press
-            bleed_rate = 0.005 if (state.id_is_txv and state.od_is_txv) else 0.025
+            bleed_tc = 40.0 if (state.id_is_txv and state.od_is_txv) else 8.0
+            bleed_rate = smooth_alpha(elapsed_seconds, bleed_tc)
 
             state.sim_od_high_press += (
                 target_eq_press - state.sim_od_high_press
@@ -805,13 +853,13 @@ async def simulation_loop():
 
             state.sim_od_suction_temp += (
                 state.set_od_temp - state.sim_od_suction_temp
-            ) * 0.05
+            ) * thermal_alpha
             state.sim_od_liquid_temp += (
                 state.set_od_temp - state.sim_od_liquid_temp
-            ) * 0.05
+            ) * thermal_alpha
             state.sim_od_discharge += (
                 state.set_od_temp - state.sim_od_discharge
-            ) * 0.05
+            ) * thermal_alpha
             target_supply = state.set_id_temp + (65.0 if phys_heating else 0.0)
 
         elif phys_cooling:
@@ -886,7 +934,22 @@ async def simulation_loop():
                 + vol_eff_penalty,
                 2.0,
             )
-            target_supply = (state.set_id_temp - 20.0) + latent_heat_penalty
+            # Keep airflow-fault offsets already applied to target_supply.
+            target_supply = (
+                (state.set_id_temp - 20.0)
+                + latent_heat_penalty
+                + (target_supply - state.set_id_temp)
+            )
+
+            # Coil below dew point diverts part of the sensible drop into latent removal.
+            coil_depth = dew_point_f(state.set_id_temp, state.set_rh) - sat_temp_f(
+                target_low, ref_mult
+            )
+            if coil_depth > 0.0:
+                latent_frac = min(coil_depth / 20.0, 1.0) * 0.2
+                sensible_drop = state.set_id_temp - target_supply
+                if sensible_drop > 0.0:
+                    target_supply += sensible_drop * latent_frac
 
             if fault_comp_bypass:
                 state.sim_od_suction_temp += 35.0
@@ -901,6 +964,18 @@ async def simulation_loop():
                 state.sim_od_discharge = add_noise(220.0, 5.0)
             if id_fan_fail:
                 state.sim_od_suction_temp = add_noise(25.0, 0.5)
+
+            state.sim_od_suction_temp = (
+                prev_temps[0]
+                + (state.sim_od_suction_temp - prev_temps[0]) * thermal_alpha
+            )
+            state.sim_od_liquid_temp = (
+                prev_temps[1]
+                + (state.sim_od_liquid_temp - prev_temps[1]) * thermal_alpha
+            )
+            state.sim_od_discharge = (
+                prev_temps[2] + (state.sim_od_discharge - prev_temps[2]) * thermal_alpha
+            )
 
             if phys_heating:
                 target_supply += (
@@ -970,7 +1045,11 @@ async def simulation_loop():
                 + vol_eff_penalty,
                 2.0,
             )
-            target_supply = (state.set_id_temp + 27.0) + (extreme_ambient_penalty * 0.1)
+            target_supply = (
+                (state.set_id_temp + 27.0)
+                + (extreme_ambient_penalty * 0.1)
+                + (target_supply - state.set_id_temp)
+            )
 
             if fault_comp_bypass:
                 state.sim_od_suction_temp += 35.0
@@ -985,6 +1064,18 @@ async def simulation_loop():
                 state.sim_od_discharge = add_noise(250.0, 5.0)
             if od_fan_fail:
                 state.sim_od_suction_temp = add_noise(5.0, 0.5)
+
+            state.sim_od_suction_temp = (
+                prev_temps[0]
+                + (state.sim_od_suction_temp - prev_temps[0]) * thermal_alpha
+            )
+            state.sim_od_liquid_temp = (
+                prev_temps[1]
+                + (state.sim_od_liquid_temp - prev_temps[1]) * thermal_alpha
+            )
+            state.sim_od_discharge = (
+                prev_temps[2] + (state.sim_od_discharge - prev_temps[2]) * thermal_alpha
+            )
 
         # Furnace supply air warms only after ignition and blower startup.
         if state.trainer_type == "ac_gas":
@@ -1001,16 +1092,20 @@ async def simulation_loop():
             )
             state.force_pressure_snap = False
         elif is_compressor:
-            state.sim_od_low_press += (target_low - state.sim_od_low_press) * 0.045
-            state.sim_od_high_press += (target_high - state.sim_od_high_press) * 0.065
+            state.sim_od_low_press += (target_low - state.sim_od_low_press) * (
+                smooth_alpha(elapsed_seconds, LOW_PRESS_TC)
+            )
+            state.sim_od_high_press += (target_high - state.sim_od_high_press) * (
+                smooth_alpha(elapsed_seconds, HIGH_PRESS_TC)
+            )
             true_liquid_target = target_high - (line_friction_delta * 1.8 * ref_mult)
             state.sim_od_liquid_press += (
                 true_liquid_target - state.sim_od_liquid_press
-            ) * 0.020
+            ) * smooth_alpha(elapsed_seconds, LIQUID_PRESS_TC)
         else:
             state.sim_od_liquid_press += (
                 target_high - state.sim_od_liquid_press
-            ) * 0.012
+            ) * smooth_alpha(elapsed_seconds, LIQUID_PRESS_IDLE_TC)
 
         if id_fan_fail:
             target_supply = 160.0 if phys_heating else state.set_id_temp
@@ -1048,7 +1143,10 @@ async def simulation_loop():
             ):  # Locked rotor or startup
                 state.sim_comp_amps = 143.0
             else:
-                amps = 10.0 + ((state.sim_od_high_press / ref_mult) * 0.035)
+                amps = compressor_amps(
+                    sat_temp_f(state.sim_od_high_press, ref_mult),
+                    sat_temp_f(state.sim_od_low_press, ref_mult),
+                )
                 if fault_comp_bypass:
                     amps -= 6.5
                 if fault_inefficient_comp:
@@ -1308,7 +1406,7 @@ async def mqtt_command_listener():
 # -------------------------------------------------
 @app.post("/api/trainer/{trainer_id}/command")
 async def send_trainer_command(
-    trainer_id: str, command: Dict[str, Any], request: Request
+    trainer_id: str, command: dict[str, Any], request: Request
 ):
     """Publish a command to a trainer over MQTT. The command payload should be a JSON object, e.g. {"action": "reset"} or {"action": "grade", "score": 95}."""
     require_instructor_or_admin(request)
@@ -1325,15 +1423,19 @@ async def send_trainer_command(
     return {"message": "command sent", "trainer_id": trainer_id}
 
 
-async def publish_selected_trainer_command(command: Dict[str, Any]) -> bool:
+async def publish_selected_trainer_command(command: dict[str, Any]) -> bool:
     trainer_id = state.selected_edge_id
     selected = get_selected_edge()
-    if (
-        not trainer_id
-        or not selected
-        or not get_edge_connected(float(selected.get("last_seen", 0.0)))
-        or mqtt_client is None
-    ):
+    if not trainer_id or not selected:
+        print("[MQTT] Cannot sync command: no selected trainer")
+        return False
+    if not get_edge_connected(float(selected.get("last_seen", 0.0))):
+        print(f"[MQTT] Cannot sync command: {trainer_id} is offline")
+        return False
+    if mqtt_client is None:
+        print(
+            f"[MQTT] Cannot sync command: broker client is disconnected for {trainer_id}"
+        )
         return False
 
     try:
@@ -1347,8 +1449,8 @@ async def publish_selected_trainer_command(command: Dict[str, Any]) -> bool:
 
 
 def trainer_settings_sync_command(
-    telemetry: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    telemetry: dict[str, Any],
+) -> dict[str, Any] | None:
     if "refrigerant" not in telemetry:
         return None
 
@@ -1443,10 +1545,11 @@ async def get_status():
         "mobile_app_connected": 1 if mobile_app_connected else 0,
         "selected_edge_label": selected_edge.get("label") if selected_edge else None,
         "trainer_type": state.trainer_type,
-        "w_call": state.state_w or state.fault_active[52] or state.fault_active[53],
-        "y_call": state.state_y or state.fault_active[51],
-        "g_call": state.state_g,
-        "o_call": state.state_o,
+        "w_call": edge_ready
+        and (state.state_w or state.fault_active[52] or state.fault_active[53]),
+        "y_call": edge_ready and (state.state_y or state.fault_active[51]),
+        "g_call": edge_ready and state.state_g,
+        "o_call": edge_ready and state.state_o,
         "is_b_type": 1 if state.is_b_type else 0,
         "force_defrost": 1 if state.force_defrost else 0,
         "diagnosis": state.latest_diagnosis,
@@ -1534,7 +1637,7 @@ async def get_status():
         payload.update(selected_edge["telemetry"])
 
     # Guarantee full fault/simulation key coverage for instructor UI rendering.
-    for fault_idx in range(1, 55):
+    for fault_idx in range(1, 57):
         key = f"f{fault_idx}"
         payload.setdefault(key, 1 if state.fault_active[fault_idx] else 0)
 
@@ -1546,18 +1649,18 @@ async def get_status():
 
 
 class ThermostatUpdate(BaseModel):
-    w: Optional[bool] = None
-    y: Optional[bool] = None
-    g: Optional[bool] = None
-    o: Optional[bool] = None
-    is_b_type: Optional[bool] = None
+    w: bool | None = None
+    y: bool | None = None
+    g: bool | None = None
+    o: bool | None = None
+    is_b_type: bool | None = None
 
 
 @app.post("/api/thermostat")
 async def update_thermostat(
     request: Request,
     req: ThermostatUpdate,
-    edge_id: Optional[str] = Query(default=None),
+    edge_id: str | None = Query(default=None),
 ):
     """External input API to click the 'thermostat' (simulating relay inputs)"""
     require_instructor_or_admin(request)
@@ -1577,19 +1680,19 @@ async def update_thermostat(
 
 
 class AmbientUpdate(BaseModel):
-    od: Optional[float] = None
-    id: Optional[float] = None
-    rh: Optional[float] = None
+    od: float | None = None
+    id: float | None = None
+    rh: float | None = None
 
 
 @app.post("/api/ambient")
 async def update_ambient(
     request: Request,
-    req: Optional[AmbientUpdate] = None,
-    od: Optional[float] = Query(default=None),
-    id: Optional[float] = Query(default=None),
-    rh: Optional[float] = Query(default=None),
-    edge_id: Optional[str] = Query(default=None),
+    req: AmbientUpdate | None = None,
+    od: float | None = Query(default=None),
+    id: float | None = Query(default=None),
+    rh: float | None = Query(default=None),
+    edge_id: str | None = Query(default=None),
 ):
     require_instructor_or_admin(request)
     maybe_select_edge(edge_id)
@@ -1620,11 +1723,16 @@ async def update_ambient(
         }
     )
 
-    return {"message": "OK", "trainer_synced": trainer_synced}
+    return {
+        "message": "OK",
+        "trainer_synced": trainer_synced,
+        "edge_required": EDGE_REQUIRED,
+        "selected_edge_id": state.selected_edge_id,
+    }
 
 
 @app.post("/api/reset")
-async def system_reset(request: Request, edge_id: Optional[str] = Query(default=None)):
+async def system_reset(request: Request, edge_id: str | None = Query(default=None)):
     require_instructor_or_admin(request)
     maybe_select_edge(edge_id)
     state.reset_all_faults_and_sims()
@@ -1640,10 +1748,10 @@ class ToggleRequest(BaseModel):
 @app.post("/api/toggle")
 async def toggle_state(
     request: Request,
-    req: Optional[ToggleRequest] = None,
-    id: Optional[str] = Query(default=None),
-    state_value: Optional[int] = Query(default=None, alias="state"),
-    edge_id: Optional[str] = Query(default=None),
+    req: ToggleRequest | None = None,
+    id: str | None = Query(default=None),
+    state_value: int | None = Query(default=None, alias="state"),
+    edge_id: str | None = Query(default=None),
 ):
     """Used by the instructor portal to turn on faults, sims, and physical relays."""
     require_instructor_or_admin(request)
@@ -1658,7 +1766,8 @@ async def toggle_state(
     if id is None or state_value is None:
         raise HTTPException(status_code=400, detail="id and state are required")
 
-    state_bool = True if state_value == 1 else False
+    state_bool = state_value == 1
+    trainer_toggle_command: dict[str, Any] | None = None
 
     if id == "reset_score":
         state.student_score = 100
@@ -1671,6 +1780,11 @@ async def toggle_state(
             simNum = int(id[4:])
             if 1 <= simNum <= 15:
                 state.sim_active[simNum] = state_bool
+                trainer_toggle_command = {
+                    "action": "toggle",
+                    "id": id,
+                    "state": int(state_bool),
+                }
         except ValueError:
             pass
     elif id.startswith("f"):
@@ -1678,6 +1792,11 @@ async def toggle_state(
             f = int(id[1:])
             if 0 <= f < len(state.fault_active):
                 state.fault_active[f] = state_bool
+                trainer_toggle_command = {
+                    "action": "toggle",
+                    "id": id,
+                    "state": int(state_bool),
+                }
         except ValueError:
             pass
     else:
@@ -1764,7 +1883,12 @@ async def toggle_state(
 
     persist_selected_runtime()
 
-    return {"message": "OK"}
+    trainer_synced = (
+        await publish_selected_trainer_command(trainer_toggle_command)
+        if trainer_toggle_command is not None
+        else False
+    )
+    return {"message": "OK", "trainer_synced": trainer_synced}
 
 
 def get_expected_diagnosis():
@@ -1823,9 +1947,9 @@ class SubmitDiagnosis(BaseModel):
 @app.post("/api/submit")
 async def submit_diagnosis(
     request: Request,
-    req: Optional[SubmitDiagnosis] = None,
-    diagnosis: Optional[str] = Query(default=None),
-    edge_id: Optional[str] = Query(default=None),
+    req: SubmitDiagnosis | None = None,
+    diagnosis: str | None = Query(default=None),
+    edge_id: str | None = Query(default=None),
 ):
     if req is not None and diagnosis is None:
         diagnosis = req.diagnosis
@@ -1888,8 +2012,7 @@ async def submit_diagnosis(
         )
         state.latest_diagnosis = f"INCORRECT: {diagnosis}"
         state.student_score -= 10
-        if state.student_score < 0:
-            state.student_score = 0
+        state.student_score = max(state.student_score, 0)
         persist_submission()
         if state.selected_edge_id != submitting_edge_id:
             sync_selected_edge_into_state()
@@ -1903,9 +2026,9 @@ class RefrigerantUpdate(BaseModel):
 @app.post("/api/refrigerant")
 async def update_refrigerant(
     request: Request,
-    req: Optional[RefrigerantUpdate] = None,
-    type: Optional[str] = Query(default=None),
-    edge_id: Optional[str] = Query(default=None),
+    req: RefrigerantUpdate | None = None,
+    type: str | None = Query(default=None),
+    edge_id: str | None = Query(default=None),
 ):
     require_instructor_or_admin(request)
     maybe_select_edge(edge_id)
@@ -1922,17 +2045,17 @@ async def update_refrigerant(
 
 
 class MeteringUpdate(BaseModel):
-    id_txv: Optional[int] = None
-    od_txv: Optional[int] = None
+    id_txv: int | None = None
+    od_txv: int | None = None
 
 
 @app.post("/api/metering")
 async def update_metering(
     request: Request,
-    req: Optional[MeteringUpdate] = None,
-    id_txv: Optional[int] = Query(default=None),
-    od_txv: Optional[int] = Query(default=None),
-    edge_id: Optional[str] = Query(default=None),
+    req: MeteringUpdate | None = None,
+    id_txv: int | None = Query(default=None),
+    od_txv: int | None = Query(default=None),
+    edge_id: str | None = Query(default=None),
 ):
     require_instructor_or_admin(request)
     maybe_select_edge(edge_id)
@@ -1990,7 +2113,7 @@ async def add_user(
         raise HTTPException(
             status_code=400, detail="Role must be student or instructor"
         )
-    if any(existing.lower() == username.lower() for existing in users_db.keys()):
+    if any(existing.lower() == username.lower() for existing in users_db):
         raise HTTPException(status_code=409, detail="User already exists")
 
     users_db[username] = {
@@ -2065,7 +2188,10 @@ async def logout(request: Request):
 
 
 @app.post("/api/edge/heartbeat")
-async def edge_heartbeat(req: Dict[str, Any], request: Request):
+async def edge_heartbeat(req: dict[str, Any], request: Request):
+    heartbeat_started = time.monotonic()
+    edge_save_seconds = 0.0
+    settings_sync_seconds = 0.0
     now = time.time()
     source_ip = req.get("source_ip") or (
         request.client.host if request.client else "unknown"
@@ -2121,6 +2247,7 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
                 if state.selected_edge_id == matched_id:
                     state.selected_edge_id = edge_id
 
+    is_new_edge = not bool(prev)
     runtime = (
         ensure_edge_runtime(prev)
         if isinstance(prev, dict) and prev
@@ -2225,12 +2352,25 @@ async def edge_heartbeat(req: Dict[str, Any], request: Request):
     if state.selected_edge_id == edge_id:
         sync_selected_edge_into_state()
 
-    save_edges_db()
+    if is_new_edge:
+        edge_save_started = time.monotonic()
+        save_edges_db(force=True)
+        edge_save_seconds = time.monotonic() - edge_save_started
 
     if state.selected_edge_id == edge_id:
         settings_command = trainer_settings_sync_command(telemetry)
         if settings_command is not None:
+            settings_sync_started = time.monotonic()
             await publish_selected_trainer_command(settings_command)
+            settings_sync_seconds = time.monotonic() - settings_sync_started
+
+    heartbeat_seconds = time.monotonic() - heartbeat_started
+    if heartbeat_seconds >= 0.5:
+        print(
+            f"[Heartbeat] slow edge={edge_id} total_ms={heartbeat_seconds * 1000:.0f} "
+            f"save_ms={edge_save_seconds * 1000:.0f} "
+            f"settings_mqtt_ms={settings_sync_seconds * 1000:.0f}"
+        )
 
     return {
         "message": "OK",
@@ -2307,7 +2447,7 @@ async def remove_edge(request: Request, req: RemoveEdgeRequest):
 
 
 @app.post("/api/edges/{edge_id}/command")
-async def send_edge_command(edge_id: str, command: Dict[str, Any], request: Request):
+async def send_edge_command(edge_id: str, command: dict[str, Any], request: Request):
     """Publish a command to a specific edge device via MQTT."""
     require_instructor_or_admin(request)
     if mqtt_client is None:

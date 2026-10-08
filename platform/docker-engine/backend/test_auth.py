@@ -166,6 +166,45 @@ class CorsConfigurationTests(unittest.TestCase):
         self.assertTrue(cors_middleware.kwargs["allow_credentials"])
 
 
+class InstructorToggleSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fault_toggle_is_persisted_and_published_to_selected_trainer(self):
+        original_state = main.state
+        main.state = main.AppState()
+        edge_id = "trainer-toggle-test"
+        main.state.selected_edge_id = edge_id
+        main.state.edges[edge_id] = {
+            "edge_id": edge_id,
+            "label": "Toggle Test Trainer",
+            "last_seen": time.time(),
+            "runtime": main.default_runtime(),
+        }
+        publish_command = AsyncMock(return_value=True)
+
+        try:
+            with (
+                patch.object(main, "require_instructor_or_admin"),
+                patch.object(main, "maybe_select_edge"),
+                patch.object(main, "save_edges_db"),
+                patch.object(
+                    main,
+                    "publish_selected_trainer_command",
+                    new=publish_command,
+                ),
+            ):
+                response = await main.toggle_state(
+                    make_request(), id="f24", state_value=1, edge_id=edge_id
+                )
+
+            self.assertTrue(main.state.fault_active[24])
+            self.assertTrue(main.state.edges[edge_id]["runtime"]["fault_active"][24])
+            publish_command.assert_awaited_once_with(
+                {"action": "toggle", "id": "f24", "state": 1}
+            )
+            self.assertTrue(response["trainer_synced"])
+        finally:
+            main.state = original_state
+
+
 def make_request(headers=()):
     return Request(
         {
@@ -264,6 +303,35 @@ class SessionAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TrainerStudentDataSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_trainer_heartbeat_does_not_save_edges_to_disk(self):
+        original_state = main.state
+        main.state = main.AppState()
+        edge_id = "trainer-heartbeat-test"
+        main.state.selected_edge_id = edge_id
+        main.state.edges[edge_id] = {
+            "edge_id": edge_id,
+            "label": "Heartbeat Test Trainer",
+            "last_seen": time.time(),
+            "runtime": main.default_runtime(),
+        }
+
+        try:
+            with patch.object(main, "save_edges_db") as save_edges:
+                response = await main.edge_heartbeat(
+                    {
+                        "edge_id": edge_id,
+                        "device_name": "Heartbeat Test Trainer",
+                        "trainer_type": "straight_ac_furnace",
+                        "wifi_rssi": -60,
+                    },
+                    make_request(),
+                )
+
+            self.assertEqual(response["edge_id"], edge_id)
+            save_edges.assert_not_called()
+        finally:
+            main.state = original_state
+
     async def test_heartbeat_updates_teacher_student_status(self):
         original_edges = main.state.edges
         original_selected_edge_id = main.state.selected_edge_id

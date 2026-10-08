@@ -13,6 +13,11 @@ public:
     void setAmbient(float od_temp, float id_temp, float rh);
     void setRefrigerant(String type, bool is_txv);
 
+    static float evaluateCapacityMap(float suction_temp_f, float discharge_temp_f);
+    static float evaluatePowerMap(float suction_temp_f, float discharge_temp_f);
+    static float evaluateCurrentMap(float suction_temp_f, float discharge_temp_f);
+    static float evaluateMassFlowMap(float suction_temp_f, float discharge_temp_f);
+
     float getCompAmps() const { return sim_comp_amps; }
     float getOdFanAmps() const { return sim_od_fan_amps; }
     float getIdFanAmps() const { return sim_id_fan_amps; }
@@ -26,6 +31,10 @@ public:
     float getOdSuctionTemp() const { return sim_od_suction_temp; }
     float getOdLiquidTemp() const { return sim_od_liquid_temp; }
     float getOdDischargeTemp() const { return sim_od_discharge; }
+    float getSatSuctionTemp() const { return sat_suction_temp; }
+    float getSatDischargeTemp() const { return sat_discharge_temp; }
+    float getSuperheat() const { return sim_od_suction_temp - sat_suction_temp; }
+    float getSubcooling() const { return sat_discharge_temp - sim_od_liquid_temp; }
     float getOdAmbient() const { return sim_od_ambient; }
 
     float getIdAmbient() const { return sim_id_ambient; }
@@ -36,6 +45,10 @@ public:
     // New getters for additional telemetry
     float getSimulatedCfm() const { return simulated_cfm; }
     float getStaticPressure() const { return static_pressure; }
+    float getCompressorCapacityBtuPerHour() const { return compressor_capacity_btu_per_hour; }
+    float getCompressorMassFlowLbPerHour() const { return compressor_mass_flow_lb_per_hour; }
+    float getCompressorPowerWatts() const { return compressor_power_watts; }
+    const char* getCompressorModelName() const;
     const char* getTelemetryState() const { return telemetry_state.c_str(); }
     bool isHighLimitTripped() const { return high_limit_tripped; }
     bool isFlameActive() const { return flame_active; }
@@ -43,21 +56,46 @@ public:
 
 private:
     float add_noise(float base, float variance);
+    float pressureToTemp(float psi, String refrigerant) const;
+    float tempToPressure(float temp_f, String refrigerant) const;
+    float tempToPressure(float temp_f, String refrigerant, bool dew_point) const;
+
+    static const float kElectricalTimeConstantSeconds;
+    static const float kPressureTimeConstantSeconds;
+    static const float kThermalMassTimeConstantSeconds;
+    static const float kEqualizationTimeConstantSeconds;
 
     uint32_t telemetry_timer;
     uint32_t comp_start_time;
-    uint32_t simulation_update_time;
+    uint32_t last_update_time;
     bool last_comp_state;
 
     float sim_comp_amps, sim_od_fan_amps, sim_id_fan_amps;
-    bool phys_lps_tripped, phys_hps_tripped;
-    String current_refrigerant;
-    bool force_pressure_snap;
-    bool id_is_txv;
-    float set_od_temp, set_id_temp, set_rh;
     float sim_od_low_press, sim_od_high_press, sim_od_liquid_press;
     float sim_od_suction_temp, sim_od_liquid_temp, sim_od_discharge, sim_od_ambient;
     float sim_id_ambient, sim_id_return_temp, sim_id_supply_temp, sim_id_rh;
+
+    float current_comp_amps;
+    float current_od_fan_amps;
+    float current_id_fan_amps;
+    float current_low_pressure;
+    float current_high_pressure;
+    float current_liquid_pressure;
+    float current_evap_temp_f;
+    float current_cond_temp_f;
+    float sat_suction_temp;
+    float sat_discharge_temp;
+    float current_id_return_temp_f;
+    float current_id_supply_temp_f;
+    float current_id_rh;
+    float compressor_capacity_btu_per_hour;
+    float compressor_mass_flow_lb_per_hour;
+    float compressor_power_watts;
+
+    bool phys_lps_tripped, phys_hps_tripped;
+    String current_refrigerant;
+    bool id_is_txv;
+    float set_od_temp, set_id_temp, set_rh;
 
     bool flame_active;
     bool blower_running;

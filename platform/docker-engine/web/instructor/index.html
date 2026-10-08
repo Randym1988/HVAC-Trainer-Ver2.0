@@ -1541,7 +1541,7 @@
                     letter-spacing: -1px;
                     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
                   "
-                  >90°F</span
+                  >95°F</span
                 >
               </div>
               <input
@@ -1549,7 +1549,7 @@
                 id="od_slider"
                 min="15"
                 max="105"
-                value="90"
+                value="95"
                 oninput="updateAmbient()"
               />
               <div
@@ -2448,6 +2448,24 @@
               </div>
               <div class="sim-category-body">
                 <div class="grid-cards">
+                  <button
+                    id="f55"
+                    data-theme="orange"
+                    data-icon="gauge"
+                    class="btn"
+                    onclick="apiAction('f55')"
+                  >
+                    Low Refrigerant Charge
+                  </button>
+                  <button
+                    id="f56"
+                    data-theme="orange"
+                    data-icon="gauge"
+                    class="btn"
+                    onclick="apiAction('f56')"
+                  >
+                    Refrigerant Overcharge
+                  </button>
                   <button
                     id="f44"
                     data-theme="orange"
@@ -3570,6 +3588,10 @@
       let selectedEdgeId = null;
       let currentTrainerType = "ac_gas";
       let edgeTrainerTypeMap = {};
+      let trainerTypeUIInitialized = false;
+      let renderedEdgeListSignature = null;
+      let ambientSyncSuppressedUntil = 0;
+      let pendingAmbientRequests = 0;
 
       function formatTrainerTypeLabel(trainerType) {
         return normalizeTrainerType(trainerType) === "heat_pump"
@@ -3596,15 +3618,17 @@
       }
 
       function applyTrainerTypeUI(trainerType) {
-        console.log("[applyTrainerTypeUI] Called with:", trainerType);
-        currentTrainerType = normalizeTrainerType(trainerType);
-        console.log("[applyTrainerTypeUI] Normalized to:", currentTrainerType);
+        const nextTrainerType = normalizeTrainerType(trainerType);
+        if (
+          trainerTypeUIInitialized &&
+          nextTrainerType === currentTrainerType
+        ) {
+          return;
+        }
+        trainerTypeUIInitialized = true;
+        currentTrainerType = nextTrainerType;
         const isHeatPump = currentTrainerType === "heat_pump";
         document.body.setAttribute("data-trainer-type", currentTrainerType);
-        console.log(
-          "[applyTrainerTypeUI] Set body[data-trainer-type] to:",
-          currentTrainerType,
-        );
 
         const heatPumpPanel = document.getElementById("heat-pump-panel");
         if (heatPumpPanel) {
@@ -3827,7 +3851,6 @@
               ? "Real-Time HVAC Simulation Environment - HEAT PUMP PROFILE"
               : "Real-Time HVAC Simulation Environment - AC + GAS FURNACE PROFILE";
         }
-        console.log("[applyTrainerTypeUI] Complete. isHeatPump:", isHeatPump);
       }
 
       function withEdgeQuery(url) {
@@ -3897,8 +3920,42 @@
         }
 
         if (edges.length === 0) {
-          listEl.innerHTML =
-            '<div style="color: var(--text-muted); font-size: 12px;">No trainers detected yet. Ensure ESP32 heartbeat is pointed to this engine.</div>';
+          const emptySignature = "[]";
+          if (renderedEdgeListSignature !== emptySignature) {
+            listEl.innerHTML =
+              '<div style="color: var(--text-muted); font-size: 12px;">No trainers detected yet. Ensure ESP32 heartbeat is pointed to this engine.</div>';
+            renderedEdgeListSignature = emptySignature;
+          }
+          return;
+        }
+
+        const edgeListSignature = JSON.stringify({
+          selectedEdgeId,
+          edges: edges.map((edge) => ({
+            edge_id: edge.edge_id,
+            label: edge.label,
+            connected: edge.connected,
+            trainer_type: edge.trainer_type,
+            source_ip: edge.source_ip,
+            identity_reboot_required: edge.identity_reboot_required,
+          })),
+        });
+        if (edgeListSignature === renderedEdgeListSignature) {
+          Array.from(listEl.children).forEach((card, index) => {
+            const edge = edges[index];
+            if (!edge) return;
+            const connected = edge.connected === 1;
+            const statusEl = card.querySelector("[data-edge-status]");
+            const rssiEl = card.querySelector("[data-edge-rssi]");
+            const ramEl = card.querySelector("[data-edge-ram]");
+            if (statusEl) {
+              statusEl.textContent = connected
+                ? "Online"
+                : `Offline (${edge.age_seconds}s)`;
+            }
+            if (rssiEl) rssiEl.textContent = `${edge.wifi_rssi ?? "--"} dBm`;
+            if (ramEl) ramEl.textContent = edge.ram ?? "--";
+          });
           return;
         }
 
@@ -3923,13 +3980,13 @@
                         <div style="font-size:13px; font-weight:800; color:var(--text-main);">${edge.label || edge.edge_id}</div>
                         <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-muted);">
                             <span style="display:inline-flex; align-items:center; justify-content:center; min-width:68px; padding:2px 8px; border-radius:999px; border:1px solid rgba(6,182,212,0.55); background:rgba(6,182,212,0.18); color:#a5f3fc; font-weight:800; letter-spacing:0.4px; text-transform:uppercase; font-size:10px; visibility:${selectedBadgeVisibility};">Selected</span>
-                            <span style="width:8px; height:8px; border-radius:50%; background:${dotColor}; display:inline-block;"></span>${statusText}
+                            <span style="width:8px; height:8px; border-radius:50%; background:${dotColor}; display:inline-block;"></span><span data-edge-status>${statusText}</span>
                         </div>
                     </div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:3px;">ID: ${edge.edge_id}</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:3px;">IP: ${edge.source_ip || "--"}</div>
                     <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Type: ${formatTrainerTypeLabel(edge.trainer_type)}</div>
-                    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">RSSI: ${edge.wifi_rssi ?? "--"} dBm | RAM: ${edge.ram ?? "--"}</div>
+                    <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">RSSI: <span data-edge-rssi>${edge.wifi_rssi ?? "--"} dBm</span> | RAM: <span data-edge-ram>${edge.ram ?? "--"}</span></div>
                     ${rebootRequired ? `<div style="color:var(--accent-yellow); font-size:11px; font-weight:700; margin-bottom:10px; padding: 6px; background: rgba(234,179,8,0.1); border-radius: 6px; text-align:center;">REBOOT REQUIRED</div>` : ""}
                     <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; align-items:stretch;">
                         <button class="btn" style="width:100%; min-width:0; justify-content:center; padding:9px 8px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-color:#713f12; color:#fde68a;" onclick="event.stopPropagation(); rebootEdge('${edge.edge_id}')">Reboot</button>
@@ -3939,6 +3996,7 @@
             `;
           })
           .join("");
+        renderedEdgeListSignature = edgeListSignature;
       }
 
       async function refreshEdges() {
@@ -4071,9 +4129,13 @@
 
       let ambientTimeout;
       function updateAmbient() {
-        let od = document.getElementById("od_slider").value;
-        let id = document.getElementById("id_slider").value;
-        let rh = document.getElementById("rh_slider").value;
+        const odSlider = document.getElementById("od_slider");
+        const idSlider = document.getElementById("id_slider");
+        const rhSlider = document.getElementById("rh_slider");
+        let od = odSlider.value;
+        let id = idSlider.value;
+        let rh = rhSlider.value;
+        ambientSyncSuppressedUntil = Date.now() + 1500;
 
         let hue = 240 - ((od - 15) / 90) * 240;
         let color = `hsl(${hue}, 90%, 60%)`;
@@ -4087,9 +4149,23 @@
 
         clearTimeout(ambientTimeout);
         ambientTimeout = setTimeout(() => {
+          pendingAmbientRequests += 1;
           fetch(withEdgeQuery(`/api/ambient?od=${od}&id=${id}&rh=${rh}`), {
             method: "POST",
-          }).catch((e) => console.error(e));
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(`Ambient update failed (${response.status})`);
+              }
+            })
+            .catch((error) => console.error(error))
+            .finally(() => {
+              pendingAmbientRequests -= 1;
+              ambientSyncSuppressedUntil = Math.max(
+                ambientSyncSuppressedUntil,
+                Date.now() + 1000,
+              );
+            });
         }, 200);
       }
 
@@ -4275,15 +4351,27 @@
       }
 
       let currentData = {};
+      const domElCache = new Map();
+      const lastValidAt = new Map();
+      const STALE_BLANK_MS = 4000;
       function updateDOM(id, val, isDecimal = false) {
-        const el = document.getElementById(id);
-        if (el) {
-          if (val === null || val === undefined || isNaN(val)) {
-            el.textContent = "--";
-          } else {
-            el.textContent = isDecimal ? val.toFixed(1) : Math.round(val);
-          }
+        let el = domElCache.get(id);
+        if (!el) {
+          el = document.getElementById(id);
+          if (!el) return;
+          domElCache.set(id, el);
         }
+        const now = Date.now();
+        let text;
+        if (val === null || val === undefined || isNaN(val)) {
+          // Hold the last good reading through brief gaps instead of flashing "--".
+          if (now - (lastValidAt.get(id) || 0) < STALE_BLANK_MS) return;
+          text = "--";
+        } else {
+          lastValidAt.set(id, now);
+          text = isDecimal ? val.toFixed(1) : String(Math.round(val));
+        }
+        if (el.textContent !== text) el.textContent = text;
       }
 
       function forceRecalculate() {
@@ -4322,15 +4410,23 @@
 
         const refType = data.refrigerant || "R410A";
 
-        let lowSat = getSaturationTemp(data.od_low_press, refType);
-        let highSat = getSaturationTemp(data.od_high_press, refType);
+        let lowSat = Number.isFinite(parseFloat(data.sat_suction_temp))
+          ? parseFloat(data.sat_suction_temp)
+          : getSaturationTemp(data.od_low_press, refType);
+        let highSat = Number.isFinite(parseFloat(data.sat_discharge_temp))
+          ? parseFloat(data.sat_discharge_temp)
+          : getSaturationTemp(data.od_high_press, refType);
 
         let superheat = null;
-        if (data.od_suction_temp !== undefined && lowSat !== null) {
+        if (Number.isFinite(parseFloat(data.superheat))) {
+          superheat = parseFloat(data.superheat);
+        } else if (data.od_suction_temp !== undefined && lowSat !== null) {
           superheat = data.od_suction_temp - lowSat;
         }
         let subcool = null;
-        if (highSat !== null && data.od_liquid_temp !== undefined) {
+        if (Number.isFinite(parseFloat(data.subcooling))) {
+          subcool = parseFloat(data.subcooling);
+        } else if (highSat !== null && data.od_liquid_temp !== undefined) {
           subcool = highSat - data.od_liquid_temp;
         }
 
@@ -4407,6 +4503,19 @@
           const el = document.getElementById(key);
           if (!el) continue;
           const isOn = rawValue === true || rawValue === 1 || rawValue === "1";
+          const pendingToggle = pendingToggleStates.get(key);
+          if (pendingToggle) {
+            if (isOn === pendingToggle.enabled) {
+              pendingToggleStates.delete(key);
+            } else if (
+              Date.now() - pendingToggle.requestedAt <
+              TOGGLE_ACK_TIMEOUT_MS
+            ) {
+              continue;
+            } else {
+              pendingToggleStates.delete(key);
+            }
+          }
           if (isOn) el.classList.add("active-toggle");
           else el.classList.remove("active-toggle");
         }
@@ -4455,6 +4564,8 @@
       let stateY = false;
       let stateO = false;
       let currentOBType = "O";
+      const pendingToggleStates = new Map();
+      const TOGGLE_ACK_TIMEOUT_MS = 5000;
 
       async function toggleOBType() {
         const nextIsB = currentOBType !== "B";
@@ -4491,13 +4602,53 @@
         if (!btn) return;
         const isActive = btn.classList.contains("active-toggle");
         const targetState = isActive ? 0 : 1;
+        const trackTelemetry =
+          /^f\d+$/.test(btnId) || /^sim_\d{2}$/.test(btnId);
+        const pendingToggle = trackTelemetry
+          ? { enabled: targetState === 1, requestedAt: Date.now() }
+          : null;
+        if (pendingToggle) pendingToggleStates.set(btnId, pendingToggle);
+        const restorePreviousState = () => {
+          if (pendingToggle && pendingToggleStates.get(btnId) !== pendingToggle)
+            return;
+          if (pendingToggle) pendingToggleStates.delete(btnId);
+          if (isActive) btn.classList.add("active-toggle");
+          else btn.classList.remove("active-toggle");
+        };
+
         btn.classList.remove("active-toggle");
         if (targetState === 1) {
           btn.classList.add("active-toggle");
         }
         fetch(withEdgeQuery(`/api/toggle?id=${btnId}&state=${targetState}`), {
           method: "POST",
-        }).catch((err) => console.error(err));
+        })
+          .then(async (response) => {
+            let result = {};
+            try {
+              result = await response.json();
+            } catch {
+              result = {};
+            }
+            if (!response.ok) {
+              throw new Error(result.detail || "Toggle request failed");
+            }
+            if (
+              pendingToggle &&
+              result.trainer_synced === false &&
+              result.edge_required &&
+              result.selected_edge_id
+            ) {
+              restorePreviousState();
+              console.warn(
+                `Trainer ${result.selected_edge_id} did not receive ${btnId}`,
+              );
+            }
+          })
+          .catch((err) => {
+            restorePreviousState();
+            console.error(err);
+          });
       }
 
       function updateGauge(id, label, value, min, max, unit, color) {
@@ -4507,6 +4658,19 @@
           card.id = "diag_" + id;
           card.className = "sensor-card";
           card.style.position = "relative";
+          card.innerHTML = `
+            <div data-gauge-label style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; text-align: center; width: 100%;"></div>
+            <div style="position: relative; width: 130px; height: 130px; margin: 0 auto;">
+                <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; transform: rotate(135deg); overflow: visible;">
+                    <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-linecap="round" />
+                    <circle data-gauge-arc cx="50" cy="50" r="40" fill="none" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-dashoffset="188.5" stroke-linecap="round" style="transition: stroke-dashoffset .25s cubic-bezier(0.34, 1.56, 0.64, 1);" />
+                </svg>
+                <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; transform: translateY(2px);">
+                    <span data-gauge-value style="font-size: 32px; font-weight: 800; color: #ffffff; letter-spacing: -1px; line-height: 1;"></span>
+                    <span data-gauge-unit style="font-size: 13px; font-weight: 700; text-transform: uppercase; margin-top: 2px; opacity: 0.8;"></span>
+                </div>
+            </div>
+          `;
           const grid = document.getElementById("diagnostics-grid");
           if (grid) grid.appendChild(card);
           else return;
@@ -4518,21 +4682,19 @@
         let gaugeVal = isNaN(numVal) ? min : numVal;
         let pct = (gaugeVal - min) / (max - min);
         pct = Math.max(0, Math.min(1, pct));
-        let dashOffset = 188.5 - pct * 188.5;
-
-        card.innerHTML = `
-            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; text-align: center; width: 100%;">${label}</div>
-            <div style="position: relative; width: 130px; height: 130px; margin: 0 auto;">
-                <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; transform: rotate(135deg); overflow: visible;">
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-linecap="round" />
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="${color}" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-dashoffset="${dashOffset}" stroke-linecap="round" style="transition: stroke-dashoffset .25s cubic-bezier(0.34, 1.56, 0.64, 1);" />
-                </svg>
-                <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; transform: translateY(2px);">
-                    <span style="font-size: 32px; font-weight: 800; color: #ffffff; letter-spacing: -1px; line-height: 1;">${displayVal}</span>
-                    <span style="font-size: 13px; font-weight: 700; color: ${color}; text-transform: uppercase; margin-top: 2px; opacity: 0.8;">${unit}</span>
-                </div>
-            </div>
-        `;
+        const labelEl = card.querySelector("[data-gauge-label]");
+        const arcEl = card.querySelector("[data-gauge-arc]");
+        const valueEl = card.querySelector("[data-gauge-value]");
+        const unitEl = card.querySelector("[data-gauge-unit]");
+        const signature = [label, color, pct, displayVal, unit].join("|");
+        if (card.dataset.sig === signature) return;
+        card.dataset.sig = signature;
+        labelEl.textContent = label;
+        arcEl.setAttribute("stroke", color);
+        arcEl.setAttribute("stroke-dashoffset", 188.5 - pct * 188.5);
+        valueEl.textContent = displayVal;
+        unitEl.textContent = unit;
+        unitEl.style.color = color;
       }
 
       function updateStatCard(id, label, mainText, subText, color) {
@@ -4541,17 +4703,25 @@
           card = document.createElement("div");
           card.id = "diag_" + id;
           card.className = "sensor-card";
+          card.innerHTML = `
+            <div data-stat-label style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; text-align: center; width: 100%;"></div>
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 130px;">
+                <span data-stat-value style="font-size: 32px; font-weight: 800; letter-spacing: -1px; text-align: center;"></span>
+                <span data-stat-subtext style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-top: 12px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.8; text-align: center;"></span>
+            </div>
+          `;
           const grid = document.getElementById("diagnostics-grid");
           if (grid) grid.appendChild(card);
           else return;
         }
-        card.innerHTML = `
-            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; text-align: center; width: 100%;">${label}</div>
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 130px;">
-                <span style="font-size: 32px; font-weight: 800; color: ${color}; letter-spacing: -1px; text-align: center;">${mainText}</span>
-                <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-top: 12px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.8; text-align: center;">${subText}</span>
-            </div>
-        `;
+        const signature = [label, mainText, subText, color].join("|");
+        if (card.dataset.sig === signature) return;
+        card.dataset.sig = signature;
+        card.querySelector("[data-stat-label]").textContent = label;
+        const valueEl = card.querySelector("[data-stat-value]");
+        valueEl.textContent = mainText;
+        valueEl.style.color = color;
+        card.querySelector("[data-stat-subtext]").textContent = subText;
       }
 
       const EDGE_POLL_INTERVAL_MS = 750;
@@ -4568,27 +4738,32 @@
           refreshEdges();
           setTimeout(initWebSocket, WS_RECONNECT_MS);
         };
-        websocket.onmessage = onMessage;
+        websocket.onmessage = queueMessage;
+      }
+
+      let queuedMessageEvent = null;
+      function queueMessage(event) {
+        // Render only the newest frame per animation tick.
+        const wasIdle = queuedMessageEvent === null;
+        queuedMessageEvent = event;
+        if (wasIdle) {
+          requestAnimationFrame(() => {
+            const next = queuedMessageEvent;
+            queuedMessageEvent = null;
+            if (next) onMessage(next);
+          });
+        }
       }
 
       function onMessage(event) {
         try {
           document.getElementById("error-banner").style.display = "none";
           const data = JSON.parse(event.data);
-          console.log(
-            "[onMessage] Received WebSocket data - trainer_type:",
-            data.trainer_type,
-            "selected_edge_id:",
-            data.selected_edge_id,
-          );
 
           if (data.selected_edge_id) {
             const changedSelection = selectedEdgeId !== data.selected_edge_id;
             selectedEdgeId = data.selected_edge_id;
             if (changedSelection) {
-              console.log(
-                "[onMessage] Selection changed via WebSocket, refreshing edges",
-              );
               refreshEdges();
             }
           }
@@ -4596,19 +4771,11 @@
             "selected-edge-trainer",
           );
           if (selectedTypeEl && data.trainer_type) {
-            console.log(
-              "[onMessage] Updating type label to:",
-              data.trainer_type,
-            );
             selectedTypeEl.textContent = formatTrainerTypeLabel(
               data.trainer_type,
             );
           }
           if (data.trainer_type) {
-            console.log(
-              "[onMessage] Calling applyTrainerTypeUI from WebSocket with:",
-              data.trainer_type,
-            );
             applyTrainerTypeUI(data.trainer_type);
           } else if (selectedEdgeId && edgeTrainerTypeMap[selectedEdgeId]) {
             const fallbackType = edgeTrainerTypeMap[selectedEdgeId];
@@ -4732,34 +4899,43 @@
           }
 
           if (
-            data.set_od !== undefined &&
-            document.activeElement !== document.getElementById("od_slider")
+            pendingAmbientRequests === 0 &&
+            Date.now() >= ambientSyncSuppressedUntil
           ) {
-            document.getElementById("od_slider").value = data.set_od;
-            let hue = 240 - ((data.set_od - 15) / 90) * 240;
-            let color = `hsl(${hue}, 90%, 60%)`;
-            document
-              .getElementById("od_slider")
-              .style.setProperty("--od-color", color);
-            document.getElementById("od_slider_val").style.color = color;
-            document.getElementById("od_slider_val").textContent =
-              data.set_od + "°F";
-          }
-          if (
-            data.set_id !== undefined &&
-            document.activeElement !== document.getElementById("id_slider")
-          ) {
-            document.getElementById("id_slider").value = data.set_id;
-            document.getElementById("id_slider_val").textContent =
-              data.set_id + "°F";
-          }
-          if (
-            data.set_rh !== undefined &&
-            document.activeElement !== document.getElementById("rh_slider")
-          ) {
-            document.getElementById("rh_slider").value = data.set_rh;
-            document.getElementById("rh_slider_val").textContent =
-              data.set_rh + "%";
+            const odSlider = document.getElementById("od_slider");
+            const idSlider = document.getElementById("id_slider");
+            const rhSlider = document.getElementById("rh_slider");
+            if (
+              data.set_od !== undefined &&
+              document.activeElement !== odSlider &&
+              odSlider.value !== String(data.set_od)
+            ) {
+              odSlider.value = data.set_od;
+              const hue = 240 - ((data.set_od - 15) / 90) * 240;
+              const color = `hsl(${hue}, 90%, 60%)`;
+              odSlider.style.setProperty("--od-color", color);
+              const valueEl = document.getElementById("od_slider_val");
+              valueEl.style.color = color;
+              valueEl.textContent = data.set_od + "°F";
+            }
+            if (
+              data.set_id !== undefined &&
+              document.activeElement !== idSlider &&
+              idSlider.value !== String(data.set_id)
+            ) {
+              idSlider.value = data.set_id;
+              document.getElementById("id_slider_val").textContent =
+                data.set_id + "°F";
+            }
+            if (
+              data.set_rh !== undefined &&
+              document.activeElement !== rhSlider &&
+              rhSlider.value !== String(data.set_rh)
+            ) {
+              rhSlider.value = data.set_rh;
+              document.getElementById("rh_slider_val").textContent =
+                data.set_rh + "%";
+            }
           }
 
           processTelemetry(data);
@@ -4862,7 +5038,11 @@
           if (data.work_history !== undefined) {
             const histEl = document.getElementById("work_history_display");
             if (histEl) {
-              histEl.innerHTML = data.work_history || "No answers logged yet.";
+              const historyHtml = data.work_history || "No answers logged yet.";
+              if (histEl.dataset.renderedHtml !== historyHtml) {
+                histEl.innerHTML = historyHtml;
+                histEl.dataset.renderedHtml = historyHtml;
+              }
             }
           }
 

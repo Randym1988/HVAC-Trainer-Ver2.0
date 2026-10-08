@@ -1,12 +1,19 @@
-Heat-pump firmware test directory.
+Unified firmware physics-engine tests.
 
-Recommended coverage for this project:
-- thermostat call intake and telemetry propagation
-- heating/cooling pressure model transitions
-- HPS/LPS trip and reset hysteresis
+The Unity tests link the real `PhysicsEngine.cpp` and cover the Copeland
+ZP29K6E-PFV performance-chart map, each refrigerant's CoolProp-derived PT curve
+and inverse lookup, off-cycle/update pressure behavior, pressure ramping,
+airflow-fault effects, and telemetry bounds. The compressor chart data is
+for R-410A at 60 Hz, 20 F superheat, and 15 F subcooling; its nominal tolerance
+is +/-5%. Map inputs beyond the published chart range clamp to the nearest
+chart edge. Other refrigerants continue to use the engine's existing scaling
+factors with this R-410A compressor map. The refrigerant PT tables likewise run
+without CoolProp on the ESP32. Build tests without uploading using the command
+below. Running them requires a dedicated ESP32 test board.
 
-Run tests with:
+Run the native tests and verify the offline-generated CoolProp table with:
 
 ```bash
-pio test -e usb
+pio test -e physics_test --without-uploading
+python tools/validate-refrigerant-pressure.py
 ```

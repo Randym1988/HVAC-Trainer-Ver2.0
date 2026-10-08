@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-extern bool fault_active[55];
+extern bool fault_active[57];
 extern bool sim_active[16];
 extern int sim_step[16];
 extern uint32_t sim_timer[16];
