@@ -212,6 +212,7 @@ const uint32_t CONTROL_TASK_SLICE_MS = 10;
 void reset_all_faults_and_sims();
 void handleDiagnosis(String submitted);
 void detectTrainerTypeAtBoot();
+float nonCondensableGaugeJitter(float variance);
 void applyTrainerIdentityMetadata();
 void runHeatPumpControlSlice();
 void runFurnaceControlSlice();
@@ -500,6 +501,7 @@ String getExpectedDiagnosis() {
   if (fault_active[15] || fault_active[16] || fault_active[17] || fault_active[18] || fault_active[19] || fault_active[20] || fault_active[21] || fault_active[22] || fault_active[23] || sim_active[12]) return "Failed Heat Strip Element";
   if (fault_active[32] || fault_active[33] || fault_active[34] || sim_active[8] || sim_active[9] || sim_active[10] || sim_active[11]) return "Defective Sequencer";
   if (sim_active[7]) return "Tripped Safety Limit";
+  if (sim_active[14]) return "Broken Y Wire";
 
   bool any_fault = false;
   for(int i=0; i<57; i++) if(fault_active[i]) any_fault = true;
@@ -559,9 +561,10 @@ String getStatusJSON() {
   doc["hps_open"] = (phys_hps_tripped || fault_active[8] || fault_active[27]) ? 1 : 0;
   doc["defrost_sensor"] = fault_active[9] ? 1 : 0; 
   
-  doc["od_low_press"] = round(sim_od_low_press * 10.0) / 10.0;
-  doc["od_high_press"] = round(sim_od_high_press * 10.0) / 10.0;
-  doc["od_discharge_press"] = round(sim_od_high_press * 10.0) / 10.0;
+  const float nc_high_jitter = nonCondensableGaugeJitter(3.5f);
+  doc["od_low_press"] = round((sim_od_low_press + nonCondensableGaugeJitter(1.75f)) * 10.0) / 10.0;
+  doc["od_high_press"] = round((sim_od_high_press + nc_high_jitter) * 10.0) / 10.0;
+  doc["od_discharge_press"] = round((sim_od_high_press + nc_high_jitter) * 10.0) / 10.0;
   doc["od_liquid_press"] = round(sim_od_liquid_press * 10.0) / 10.0;
   doc["od_suction_temp"] = round(sim_od_suction_temp * 10.0) / 10.0;
   doc["od_liquid_temp"] = round(sim_od_liquid_temp * 10.0) / 10.0;
@@ -1927,6 +1930,12 @@ float add_noise(float base, float variance) {
   return base + ((r * (variance * 2.0)) - variance);
 }
 
+// Air in the system makes heat pump gauges bounce; the furnace engine applies its own jitter.
+float nonCondensableGaugeJitter(float variance) {
+  if (active_trainer_type != HEAT_PUMP || !fault_active[40] || sim_comp_amps < 1.0f) return 0.0f;
+  return add_noise(0.0f, variance);
+}
+
 // ==========================================
 // ðŸš€ DYNAMIC PHYSICS & FAULT ENGINE
 // ==========================================
@@ -2026,6 +2035,8 @@ void handle_telemetry() {
   bool fault_high_id_cfm      = fault_active[47];
   bool fault_stuck_od_txv     = fault_active[48]; 
   bool fault_rv_bypass        = fault_active[49]; 
+  bool fault_low_charge       = fault_active[55];
+  bool fault_overcharge       = fault_active[56];
 
   float heat_boost = 0.0;
   bool hs1_broken = fault_active[15] || fault_active[18] || fault_active[21] || fault_active[32] || sim_active[8] || sim_active[12];
@@ -2074,7 +2085,7 @@ void handle_telemetry() {
 
     line_friction_delta = od_fan_fail ? 8.0f : 18.0f; 
 
-    if (fault_non_condensables) { target_high += 130.0f; target_low += 5.0f; line_friction_delta += 10.0f; }
+    if (fault_non_condensables) { target_high += 55.0f; target_low += 5.0f; line_friction_delta += 10.0f; }
     if (fault_stuck_id_txv) { target_low += 25.0f; target_high -= 30.0f; target_sh = 0.5f; }
     if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
@@ -2082,6 +2093,8 @@ void handle_telemetry() {
     if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
     if (fault_low_id_cfm) { target_low -= 20.0f; target_sh = 2.0f; target_supply -= 12.0f; line_friction_delta -= 6.0f; }
     if (fault_high_id_cfm) { target_low += 15.0f; target_sh += 15.0f; target_supply += 8.0f; line_friction_delta += 5.0f; }
+    if (fault_low_charge) { target_low -= 30.0f; target_high -= 35.0f; target_sh += 18.0f; }
+    if (fault_overcharge) { target_low += 3.0f; target_high += 45.0f; target_sh -= 3.0f; }
 
     float low_abs = sim_od_low_press + 14.7f;
     if (low_abs < 1.0f) low_abs = 1.0f;
@@ -2092,8 +2105,11 @@ void handle_telemetry() {
     target_low += vol_eff_penalty;
     
     if (od_fan_fail) {
+      const float normal_high = target_high;
       condensing_sat_temp_f = set_od_temp + 50.0f;
       target_high = pressureAtSaturation(condensing_sat_temp_f, false, 600.0f);
+      // Higher head pressure reduces compressor pumping and metering flow, so suction rises with it.
+      target_low += max(target_high - normal_high, 0.0f) * 0.12f;
     }
     if (id_fan_fail) {
       target_low = max(lps_trip * 0.75f, 0.0f);
@@ -2111,6 +2127,8 @@ void handle_telemetry() {
     if (fault_rv_bypass) sim_od_suction_temp += 45.0f; 
     if (fault_non_condensables) sim_od_liquid_temp -= 12.0f; 
     if (fault_clogged_txv || fault_clogged_piston) sim_od_liquid_temp -= 15.0f; 
+    if (fault_low_charge) sim_od_liquid_temp += 9.0f;
+    if (fault_overcharge) sim_od_liquid_temp -= 14.0f;
 
     if (od_fan_fail) sim_od_discharge = add_noise(220.0f, 5.0f);
     if (id_fan_fail) sim_od_suction_temp = add_noise(25.0f, 0.5f); 
@@ -2128,7 +2146,7 @@ void handle_telemetry() {
 
     line_friction_delta = id_fan_fail ? 7.0f : 24.0f; 
 
-    if (fault_non_condensables) { target_high += 130.0f; target_low += 5.0f; line_friction_delta += 12.0f; }
+    if (fault_non_condensables) { target_high += 55.0f; target_low += 5.0f; line_friction_delta += 12.0f; }
     if (fault_stuck_od_txv) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
@@ -2136,6 +2154,8 @@ void handle_telemetry() {
     if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
     if (fault_low_id_cfm) { target_high += 55.0f; target_supply += 18.0f; line_friction_delta += 10.0f; }
     if (fault_high_id_cfm) { target_high -= 25.0f; target_supply -= 9.0f; line_friction_delta -= 6.0f; }
+    if (fault_low_charge) { target_low -= 20.0f; target_high -= 40.0f; target_sh += 18.0f; }
+    if (fault_overcharge) { target_low += 3.0f; target_high += 50.0f; target_sh -= 3.0f; }
 
     float low_abs = sim_od_low_press + 14.7f;
     if (low_abs < 1.0f) low_abs = 1.0f;
@@ -2165,6 +2185,8 @@ void handle_telemetry() {
     if (fault_rv_bypass) sim_od_suction_temp += 45.0f; 
     if (fault_non_condensables) sim_od_liquid_temp -= 12.0f; 
     if (fault_clogged_txv || fault_clogged_piston) sim_od_liquid_temp -= 15.0f; 
+    if (fault_low_charge) sim_od_liquid_temp += 9.0f;
+    if (fault_overcharge) sim_od_liquid_temp -= 14.0f;
 
     if (id_fan_fail) sim_od_discharge = add_noise(250.0f, 5.0f);
     if (od_fan_fail) sim_od_suction_temp = add_noise(5.0f, 0.5f); 

@@ -683,6 +683,35 @@ def is_edge_ready() -> bool:
     )
 
 
+def get_hvac_mode_states(
+    trainer_type: str,
+    compressor_running: bool,
+    effective_w_call: bool,
+    o_call: bool,
+    is_b_type: bool,
+    o_wire_broken: bool,
+    reversing_valve_failed: bool,
+    flame_active: bool,
+) -> tuple[bool, bool]:
+    if trainer_type != "heat_pump":
+        return effective_w_call or flame_active, compressor_running
+
+    valve_energized = o_call and not o_wire_broken
+    if is_b_type:
+        heating = (
+            compressor_running and valve_energized and not reversing_valve_failed
+        ) or effective_w_call
+        cooling = compressor_running and (
+            not valve_energized or reversing_valve_failed
+        )
+    else:
+        cooling = compressor_running and valve_energized and not reversing_valve_failed
+        heating = (
+            compressor_running and (not valve_energized or reversing_valve_failed)
+        ) or effective_w_call
+    return heating, cooling
+
+
 async def simulation_loop():
     """
     Replaces the loop() function inside the ESP32.
@@ -756,6 +785,8 @@ async def simulation_loop():
         fault_low_id_cfm = state.fault_active[46]
         fault_high_id_cfm = state.fault_active[47]
         fault_rv_bypass = state.fault_active[49]
+        fault_low_charge = state.fault_active[55]
+        fault_overcharge = state.fault_active[56]
 
         target_supply = state.set_id_temp
         target_low = state.sim_od_low_press
@@ -801,6 +832,10 @@ async def simulation_loop():
             state.phys_hps_tripped or state.fault_active[8] or state.fault_active[27]
         )
         y_broken = state.fault_active[2] or state.sim_active[14]
+        o_wire_broken = state.fault_active[1]
+        reversing_valve_failed = (
+            state.fault_active[12] or state.sim_active[5] or state.sim_active[13]
+        )
         grounded_w = state.fault_active[52]
         shorted_w_to_r = state.fault_active[53]
         shorted_y_to_r = state.fault_active[51]
@@ -819,28 +854,19 @@ async def simulation_loop():
             and (not state.sim_active[15])
         )
 
-        # Hardware states derived from logic.
-        # O/B reversing-valve semantics:
-        # - O mode (is_b_type=0): O energized => cooling, O de-energized => heating
-        # - B mode (is_b_type=1): B energized => heating, B de-energized => cooling
-        if state.trainer_type == "heat_pump":
-            rv_heating = state.state_o if state.is_b_type else (not state.state_o)
-            # W call acts as aux/emergency heat overlay.
-            phys_heating = (is_compressor and rv_heating) or effective_w_call
-            phys_cooling = is_compressor and (not rv_heating)
-        else:  # ac_gas furnace
-            phys_heating = effective_w_call
-            phys_cooling = is_compressor
-
-        # Override heating state with firmware-native simulation if available
-        if sim_edge and sim_edge.get("telemetry", {}).get("sim_flame_active"):
-            phys_heating = True
-            phys_cooling = is_compressor and (not rv_heating)
-            # W call acts as aux/emergency heat overlay.
-            phys_heating = (is_compressor and rv_heating) or effective_w_call
-        else:
-            phys_heating = effective_w_call
-            phys_cooling = is_compressor
+        flame_active = bool(
+            sim_edge and sim_edge.get("telemetry", {}).get("sim_flame_active")
+        )
+        phys_heating, phys_cooling = get_hvac_mode_states(
+            trainer_type=state.trainer_type,
+            compressor_running=is_compressor,
+            effective_w_call=effective_w_call,
+            o_call=state.state_o,
+            is_b_type=state.is_b_type,
+            o_wire_broken=o_wire_broken,
+            reversing_valve_failed=reversing_valve_failed,
+            flame_active=flame_active,
+        )
 
         # ==================================
         # 2. REFRIGERANT PHYSICS LOGIC
@@ -886,7 +912,7 @@ async def simulation_loop():
             line_friction_delta = 8.0 if od_fan_fail else 18.0
 
             if fault_non_condensables:
-                target_high += 130.0 * ref_mult
+                target_high += 55.0 * ref_mult
                 target_low += 5.0 * ref_mult
                 line_friction_delta += 10.0
             if fault_stuck_id_txv:
@@ -917,6 +943,14 @@ async def simulation_loop():
                 target_sh += 15.0
                 target_supply += 8.0
                 line_friction_delta += 5.0
+            if fault_low_charge:
+                target_low -= 30.0 * ref_mult
+                target_high -= 35.0 * ref_mult
+                target_sh += 18.0
+            if fault_overcharge:
+                target_low += 3.0 * ref_mult
+                target_high += 45.0 * ref_mult
+                target_sh -= 3.0
 
             low_abs = max(state.sim_od_low_press + 14.7, 1.0)
             comp_ratio = (state.sim_od_high_press + 14.7) / low_abs
@@ -925,7 +959,10 @@ async def simulation_loop():
             target_low += vol_eff_penalty * ref_mult
 
             if od_fan_fail:
+                normal_high = target_high
                 target_high = 600.0 * ref_mult
+                # Suction rises with head pressure as pumping and metering flow drop.
+                target_low += max(target_high - normal_high, 0.0) * 0.12
             if id_fan_fail:
                 target_low = lps_trip * 0.75
                 line_friction_delta = 2.0
@@ -965,6 +1002,10 @@ async def simulation_loop():
                 state.sim_od_liquid_temp -= 12.0
             if fault_clogged_txv or fault_clogged_piston:
                 state.sim_od_liquid_temp -= 15.0
+            if fault_low_charge:
+                state.sim_od_liquid_temp += 9.0
+            if fault_overcharge:
+                state.sim_od_liquid_temp -= 14.0
 
             if od_fan_fail:
                 state.sim_od_discharge = add_noise(220.0, 5.0)
@@ -1001,7 +1042,7 @@ async def simulation_loop():
             line_friction_delta = 7.0 if id_fan_fail else 24.0
 
             if fault_non_condensables:
-                target_high += 130.0 * ref_mult
+                target_high += 55.0 * ref_mult
                 target_low += 5.0 * ref_mult
                 line_friction_delta += 12.0
             if fault_stuck_od_txv or fault_clogged_txv or fault_clogged_piston:
@@ -1026,6 +1067,14 @@ async def simulation_loop():
                 target_high -= 25.0 * ref_mult
                 target_supply -= 9.0
                 line_friction_delta -= 6.0
+            if fault_low_charge:
+                target_low -= 20.0 * ref_mult
+                target_high -= 40.0 * ref_mult
+                target_sh += 18.0
+            if fault_overcharge:
+                target_low += 3.0 * ref_mult
+                target_high += 50.0 * ref_mult
+                target_sh -= 3.0
 
             low_abs = max(state.sim_od_low_press + 14.7, 1.0)
             comp_ratio = (state.sim_od_high_press + 14.7) / low_abs
@@ -1065,6 +1114,10 @@ async def simulation_loop():
                 state.sim_od_liquid_temp -= 12.0
             if fault_clogged_txv or fault_clogged_piston:
                 state.sim_od_liquid_temp -= 15.0
+            if fault_low_charge:
+                state.sim_od_liquid_temp += 9.0
+            if fault_overcharge:
+                state.sim_od_liquid_temp -= 14.0
 
             if id_fan_fail:
                 state.sim_od_discharge = add_noise(250.0, 5.0)
@@ -1508,9 +1561,11 @@ async def get_status():
     """Returns the complete JSON state of the system for the frontend"""
 
     # Simulate simple noise for realistic gauges as done in C++
-    low_noise = (random.random() * 0.8) - 0.4
-    high_noise = (random.random() * 1.2) - 0.6
-    liquid_noise = (random.random() * 1.0) - 0.5
+    # Air in the system (fault 40) makes gauges bounce while the compressor runs.
+    air_jitter = state.fault_active[40] and state.sim_comp_amps > 1.0
+    low_noise = (random.random() * 2.0 - 1.0) * (1.75 if air_jitter else 0.4)
+    high_noise = (random.random() * 2.0 - 1.0) * (3.5 if air_jitter else 0.6)
+    liquid_noise = (random.random() * 2.0 - 1.0) * (3.5 if air_jitter else 0.5)
 
     # Map Python FurnaceState string to C++ enum integer to keep frontend happy
     furnace_map = {
@@ -1902,25 +1957,45 @@ def get_expected_diagnosis():
         return "Low Indoor Airflow"
     if state.fault_active[47]:
         return "High Indoor Airflow"
+    if state.fault_active[55]:
+        return "Low Refrigerant Charge"
+    if state.fault_active[56]:
+        return "Refrigerant Overcharge"
     if state.fault_active[40]:
         return "Non-Condensables"
     if state.fault_active[41]:
         return "Stuck Indoor TXV"
+    if state.fault_active[48]:
+        return "Stuck Outdoor TXV"
     if state.fault_active[42]:
         return "Clogged TXV"
     if state.fault_active[43]:
         return "Clogged Piston"
+    if state.fault_active[49]:
+        return "RV Bypassing"
     if state.fault_active[44]:
         return "Compressor Internal Bypass"
     if state.fault_active[45]:
         return "Inefficient Compressor"
 
-    if state.fault_active[24] or state.sim_active[1] or state.sim_active[6]:
+    if state.fault_active[24] or any(
+        state.sim_active[index] for index in (1, 2, 6)
+    ):
         return "Failed Indoor Blower"
-    if state.fault_active[6] or state.sim_active[3]:
+    if state.fault_active[6] or any(state.sim_active[index] for index in (3, 4)):
         return "Failed Condenser Fan"
+    if state.fault_active[12] or state.sim_active[5] or state.sim_active[13]:
+        return "Stuck Reversing Valve"
     if state.sim_active[15] or state.fault_active[31] or state.fault_active[4]:
         return "Failed Compressor / Overload"
+    if state.sim_active[12]:
+        return "Failed Heat Strip Element"
+    if any(state.sim_active[index] for index in (8, 9, 10, 11)):
+        return "Defective Sequencer"
+    if state.sim_active[7]:
+        return "Tripped Safety Limit"
+    if state.sim_active[14]:
+        return "Broken Y Wire"
     if state.fault_active[15]:
         return "Failed Inducer Motor"
     if state.fault_active[18]:

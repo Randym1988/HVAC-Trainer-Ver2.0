@@ -85,6 +85,20 @@ Notes:
   - `HEAT_PUMP`: existing heat pump simulation/control logic.
   - `STRAIGHT_AC_FURNACE`: furnace controller + physics engine, including gas valve and blower monitor inputs via optocouplers.
 
+## Instructor Simulations
+
+The portal exposes simulations 1-15. Simulations 1-4, 6, and 15 are shared
+between trainer profiles; furnace mode maps blower failures (1, 2, 6) to f24,
+outdoor fan failures (3, 4) to f6, and compressor overload (15) to f31.
+Simulations 5 and 7-14 are heat-pump-only and are hidden in furnace mode.
+
+Simulation 13 is the intermittent reversing-valve coil fault. It uses the
+same Board 3 pin 11 fault channel as simulation 5, but cycles the fault while
+the O/B call is active. Simulation 14 models an intermittent Y-wire break.
+The backend mirrors reversing-valve, O/B mode, and expected-diagnosis behavior
+for these simulations. Bench validation of relay contacts and trainer behavior
+is still required; software checks do not establish physical operation.
+
 ## API Access
 
 - Sign in with `POST /api/login` using form fields `user` and `pass`; credentials are no longer accepted in the URL.

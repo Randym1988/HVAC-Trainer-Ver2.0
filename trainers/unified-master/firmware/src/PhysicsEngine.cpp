@@ -454,21 +454,39 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	if (system_charge_ratio < 0.9f) {
 		// Starved evaporator: less refrigerant reaches the metering device.
 		superheat_f += (1.0f - system_charge_ratio) * 40.0f;
+		// Less refrigerant circulating drops suction and heat rejection (head).
+		evaporator_flow_factor *= 1.0f - (1.0f - system_charge_ratio) * 0.95f;
 	}
-	if (has_faults && faults[40]) condenser_heat_transfer_factor = 0.72f;
+	float restriction_subcool_f = 0.0f;
+	float restriction_liquid_drop_psi = 0.0f;
+	// Fault 40: air/non-condensables.
+	float non_condensable_psi = 0.0f;
+	float gauge_jitter_variance = 0.4f;
+	if (has_faults && faults[40]) {
+		// Trapped air blankets the top condenser tubes.
+		condenser_heat_transfer_factor *= 0.65f;
+		non_condensable_psi = 55.0f;
+		gauge_jitter_variance = 3.5f;
+	}
 	if (has_faults && faults[41]) {
 		evaporator_flow_factor = 1.08f;
 		superheat_f = 6.0f;
 	}
 	if (has_faults && faults[42]) {
-		evaporator_flow_factor = 0.68f;
-		superheat_f = 22.0f;
+		// Debris in the TXV inlet screen: starved coil plus a pressure drop at the restriction.
+		evaporator_flow_factor = 0.40f;
+		superheat_f = 38.0f;
+		restriction_subcool_f = 6.0f;
+		restriction_liquid_drop_psi = 25.0f;
 	}
 	if (has_faults && faults[43]) {
-		evaporator_flow_factor = 0.82f;
-		superheat_f = 18.0f;
+		// Fixed-orifice restriction: liquid backs up in the condenser.
+		evaporator_flow_factor = 0.45f;
+		superheat_f = 40.0f;
+		restriction_subcool_f = 8.0f;
 	}
-	if (has_faults && faults[44]) compressor_capacity_factor = 0.65f;
+	// Open internal bypass leaks discharge gas back to the suction side.
+	if (has_faults && faults[44]) compressor_capacity_factor = 0.5f;
 	if (has_faults && faults[45]) {
 		compressor_capacity_factor = 0.85f;
 		compressor_efficiency_factor = 0.75f;
@@ -565,6 +583,7 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 			current_subcool -= (1.0f - system_charge_ratio) * 50.0f;
 		}
 		// Reduced outdoor airflow leaves no heat sink to subcool the liquid.
+		current_subcool += restriction_subcool_f;
 		current_subcool *= outdoor_cfm / kOutdoorDesignCfm;
 		current_subcool = constrain(current_subcool, 0.0f, 40.0f);
 	}
@@ -605,6 +624,12 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		current_evap_temp_f, current_refrigerant, true);
 	float target_high_pressure = tempToPressure(
 		current_cond_temp_f, current_refrigerant, false);
+	// Dalton's law: air adds partial pressure on top of the refrigerant pressure.
+	if (compressor_running && non_condensable_psi > 0.0f) {
+		target_high_pressure += non_condensable_psi;
+		// Gauges read the inflated pressure, so calculated subcooling reads high.
+		sat_discharge_temp = pressureToTemp(target_high_pressure, current_refrigerant);
+	}
 	if (compressor_running && !blower_running) {
 		target_low_pressure = min(target_low_pressure, lps_trip * 0.75f);
 		sat_suction_temp = pressureToTemp(target_low_pressure, current_refrigerant);
@@ -619,7 +644,8 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		sat_discharge_temp = sat_suction_temp;
 	}
 	const float pressure_drop_psi = compressor_running
-		? constrain(0.5f + 0.004f * compressor_mass_flow_lb_per_hour, 0.5f, 8.0f)
+		? constrain(0.5f + 0.004f * compressor_mass_flow_lb_per_hour, 0.5f, 8.0f) +
+			restriction_liquid_drop_psi
 		: 0.0f;
 	const float target_liquid_pressure = target_high_pressure - pressure_drop_psi;
 	const float pressure_time_constant = compressor_running
@@ -639,9 +665,10 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	sim_comp_amps = constrain(add_noise(current_comp_amps, 0.08f), 0.0f, 40.0f);
 	sim_od_fan_amps = constrain(add_noise(current_od_fan_amps, 0.03f), 0.0f, 10.0f);
 	sim_id_fan_amps = constrain(add_noise(current_id_fan_amps, 0.08f), 0.0f, 15.0f);
-	sim_od_low_press = constrain(add_noise(low_pressure, 0.4f), 0.0f, 250.0f);
-	sim_od_high_press = constrain(add_noise(high_pressure, 0.6f), 0.0f, 650.0f);
-	sim_od_liquid_press = constrain(add_noise(liquid_pressure, 0.5f), 0.0f, 650.0f);
+	const bool air_in_system = gauge_jitter_variance > 0.4f;
+	sim_od_low_press = constrain(add_noise(low_pressure, air_in_system ? gauge_jitter_variance * 0.5f : 0.4f), 0.0f, 250.0f);
+	sim_od_high_press = constrain(add_noise(high_pressure, air_in_system ? gauge_jitter_variance : 0.6f), 0.0f, 650.0f);
+	sim_od_liquid_press = constrain(add_noise(liquid_pressure, air_in_system ? gauge_jitter_variance : 0.5f), 0.0f, 650.0f);
 	sim_od_suction_temp = constrain(add_noise(target_suction_temp, 0.4f), -40.0f, 250.0f);
 	sim_od_liquid_temp = constrain(add_noise(target_liquid_temp, 0.5f), -40.0f, 250.0f);
 	sim_od_discharge = constrain(add_noise(target_discharge_temp, 1.0f), -40.0f, 300.0f);

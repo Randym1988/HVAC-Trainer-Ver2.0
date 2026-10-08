@@ -32,3 +32,4 @@ tools/trainer-instance-registry.json
 # OS files
 .DS_Store
 Thumbs.db
+tools/trainer-login-credentials.txt
