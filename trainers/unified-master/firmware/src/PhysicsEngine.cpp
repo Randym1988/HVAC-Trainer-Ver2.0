@@ -10,10 +10,11 @@ const float PhysicsEngine::kEqualizationTimeConstantSeconds = 120.0f;
 namespace {
 constexpr float kOutdoorDesignCfm = 3000.0f;
 constexpr float kBtuPerTon = 12000.0f;
-constexpr float kIndoorCfmPerTon = 400.0f;
+constexpr float kIndoorCfmPerTon = 420.0f;
 constexpr float kCompressorRatedCoolingCapacityBtuPerHour = 36000.0f;
-// About 467 CFM/ton on the 3-ton nameplate; gives an 18-20 F coil split.
-constexpr float kRatedIndoorCfm = 1400.0f;
+// Rated indoor airflow for the 3-ton nameplate.
+constexpr float kRatedIndoorCfm =
+	(kCompressorRatedCoolingCapacityBtuPerHour / kBtuPerTon) * kIndoorCfmPerTon;
 constexpr float kCompressorMapRatedCapacityBtuPerHour = 29400.0f;
 constexpr float kEvaporatorReferenceCapacityBtuPerHour =
 	kCompressorMapRatedCapacityBtuPerHour;
@@ -486,7 +487,7 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		const float air_to_coil_delta = max(set_id_temp - current_evap_temp_f, 0.0f);
 		const float sensible_delta_t = air_to_coil_delta * kIndoorCoilAirEffectiveness;
 		sensible_load_btu_per_hour = 1.08f * simulated_cfm * sensible_delta_t;
-		const float humidity_load = constrain((set_rh - 30.0f) / 20.0f, 0.0f, 2.0f);
+		const float humidity_load = max((set_rh - 30.0f) / 20.0f, 0.0f);
 		latent_load_btu_per_hour = sensible_load_btu_per_hour *
 			kLatentLoadFractionAt50Rh * humidity_load;
 		heat_absorbed_btu_per_hour =
@@ -567,7 +568,7 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		current_subcool *= outdoor_cfm / kOutdoorDesignCfm;
 		current_subcool = constrain(current_subcool, 0.0f, 40.0f);
 	}
-	const float target_suction_temp = current_evap_temp_f + current_superheat;
+	float target_suction_temp = current_evap_temp_f + current_superheat;
 	// Liquid cannot be colder than outdoor air plus a 3 F approach.
 	const float target_liquid_temp = compressor_running
 		? max(current_cond_temp_f - current_subcool, set_od_temp + 3.0f)
@@ -597,10 +598,18 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	current_id_rh = smoothToward(current_id_rh, set_rh, dt,
 		kThermalMassTimeConstantSeconds);
 
+	float lps_trip, lps_reset, hps_trip, hps_reset;
+	getPressureSwitchLimits(current_refrigerant, lps_trip, lps_reset,
+		hps_trip, hps_reset);
 	float target_low_pressure = tempToPressure(
 		current_evap_temp_f, current_refrigerant, true);
 	float target_high_pressure = tempToPressure(
 		current_cond_temp_f, current_refrigerant, false);
+	if (compressor_running && !blower_running) {
+		target_low_pressure = min(target_low_pressure, lps_trip * 0.75f);
+		sat_suction_temp = pressureToTemp(target_low_pressure, current_refrigerant);
+		target_suction_temp = sat_suction_temp + current_superheat;
+	}
 	if (!compressor_running) {
 		const float equalized_pressure =
 			(target_low_pressure + target_high_pressure) * 0.5f;
@@ -613,12 +622,15 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		? constrain(0.5f + 0.004f * compressor_mass_flow_lb_per_hour, 0.5f, 8.0f)
 		: 0.0f;
 	const float target_liquid_pressure = target_high_pressure - pressure_drop_psi;
+	const float pressure_time_constant = compressor_running
+		? kPressureTimeConstantSeconds
+		: kEqualizationTimeConstantSeconds;
 	current_low_pressure = constrain(smoothToward(current_low_pressure,
-		target_low_pressure, dt, kPressureTimeConstantSeconds), 0.0f, 250.0f);
+		target_low_pressure, dt, pressure_time_constant), 0.0f, 250.0f);
 	current_high_pressure = constrain(smoothToward(current_high_pressure,
-		target_high_pressure, dt, kPressureTimeConstantSeconds), 0.0f, 650.0f);
+		target_high_pressure, dt, pressure_time_constant), 0.0f, 650.0f);
 	current_liquid_pressure = constrain(smoothToward(current_liquid_pressure,
-		target_liquid_pressure, dt, kPressureTimeConstantSeconds), 0.0f, 650.0f);
+		target_liquid_pressure, dt, pressure_time_constant), 0.0f, 650.0f);
 	const float low_pressure = current_low_pressure;
 	const float high_pressure = current_high_pressure;
 	const float liquid_pressure = current_liquid_pressure;
@@ -641,8 +653,6 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	simulated_cfm = constrain(simulated_cfm, 0.0f, 2000.0f);
 	static_pressure = constrain(static_pressure, 0.0f, 2.0f);
 
-	float lps_trip, lps_reset, hps_trip, hps_reset;
-	getPressureSwitchLimits(current_refrigerant, lps_trip, lps_reset, hps_trip, hps_reset);
 	if (low_pressure <= lps_trip) phys_lps_tripped = true;
 	else if (low_pressure >= lps_reset) phys_lps_tripped = false;
 	if (high_pressure >= hps_trip) phys_hps_tripped = true;

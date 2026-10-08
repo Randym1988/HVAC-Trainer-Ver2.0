@@ -623,7 +623,7 @@ def get_refrigerant_multiplier(refrigerant: str) -> float:
 HIGH_PRESS_TC = 3.0
 LOW_PRESS_TC = 4.0
 LIQUID_PRESS_TC = 10.0
-LIQUID_PRESS_IDLE_TC = 15.0
+LIQUID_PRESS_IDLE_TC = 120.0
 THERMAL_MASS_TC = 15.0
 
 
@@ -841,8 +841,7 @@ async def simulation_loop():
         if not is_compressor:
             target_low = target_eq_press
             target_high = target_eq_press
-            bleed_tc = 40.0 if (state.id_is_txv and state.od_is_txv) else 8.0
-            bleed_rate = smooth_alpha(elapsed_seconds, bleed_tc)
+            bleed_rate = smooth_alpha(elapsed_seconds, 120.0)
 
             state.sim_od_high_press += (
                 target_eq_press - state.sim_od_high_press

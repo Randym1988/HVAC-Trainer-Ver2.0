@@ -17,6 +17,10 @@ GPIO 9:  I2C Clock (SCL) for PCF8575 I/O Expanders
 GPIO 10: Blower Motor Monitor Input (via Optocoupler)
 GPIO 48: Status LED (NeoPixel)
 
+# No condenser-fan feedback GPIO is assigned in this pin map. Condenser-fan
+# trainer faults are simulated in firmware; physical fan feedback would require
+# an approved hardware/pin-map change.
+
 # ==================================================
 # Board 1 (Address 0x20) - Fault Simulation Relays
 # ==================================================

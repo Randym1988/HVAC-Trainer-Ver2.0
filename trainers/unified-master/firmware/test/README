@@ -8,8 +8,11 @@ for R-410A at 60 Hz, 20 F superheat, and 15 F subcooling; its nominal tolerance
 is +/-5%. Map inputs beyond the published chart range clamp to the nearest
 chart edge. Other refrigerants continue to use the engine's existing scaling
 factors with this R-410A compressor map. The refrigerant PT tables likewise run
-without CoolProp on the ESP32. Build tests without uploading using the command
-below. Running them requires a dedicated ESP32 test board.
+without CoolProp on the ESP32. Fault coverage checks that blower loss trips the
+low-pressure switch near its trip threshold, holds it until pressure recovers,
+and that condenser-fan loss raises liquid pressure during cooling. Build tests
+without uploading using the command below. Running them requires a dedicated
+ESP32 test board.
 
 Run the native tests and verify the offline-generated CoolProp table with:
 

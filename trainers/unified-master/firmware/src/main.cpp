@@ -2039,6 +2039,8 @@ void handle_telemetry() {
   float target_supply = set_id_temp; 
   float target_low = sim_od_low_press;
   float target_high = sim_od_high_press;
+  const float pressure_equalization_rate =
+      static_cast<float>(current_interval) / 120000.0f;
   float target_sh = 12.0;
   float evaporating_sat_temp_f = set_id_temp - 35.0f;
   float condensing_sat_temp_f = set_od_temp + 20.0f;
@@ -2051,10 +2053,11 @@ void handle_telemetry() {
 
   if (!is_compressor) {
     target_low = target_eq_press; target_high = target_eq_press;
-    float bleed_rate = (id_is_txv && od_is_txv) ? 0.005f : 0.025f; 
     
-    sim_od_high_press += (target_eq_press - sim_od_high_press) * bleed_rate;
-    sim_od_low_press += (target_eq_press - sim_od_low_press) * bleed_rate;
+    sim_od_high_press +=
+        (target_eq_press - sim_od_high_press) * pressure_equalization_rate;
+    sim_od_low_press +=
+        (target_eq_press - sim_od_low_press) * pressure_equalization_rate;
     
     sim_od_suction_temp += (set_od_temp - sim_od_suction_temp) * 0.05f;
     sim_od_liquid_temp += (set_od_temp - sim_od_liquid_temp) * 0.05f;
@@ -2093,8 +2096,7 @@ void handle_telemetry() {
       target_high = pressureAtSaturation(condensing_sat_temp_f, false, 600.0f);
     }
     if (id_fan_fail) {
-      evaporating_sat_temp_f = set_id_temp - 55.0f;
-      target_low = pressureAtSaturation(evaporating_sat_temp_f, true, 20.0f);
+      target_low = max(lps_trip * 0.75f, 0.0f);
       line_friction_delta = 2.0f;
     }
 
@@ -2182,7 +2184,8 @@ void handle_telemetry() {
       float true_liquid_target = target_high - (line_friction_delta * 1.8f);
       sim_od_liquid_press += (true_liquid_target - sim_od_liquid_press) * 0.035f; 
   } else {
-      sim_od_liquid_press += (target_high - sim_od_liquid_press) * 0.02f; // Equalize back to static
+      sim_od_liquid_press +=
+          (target_high - sim_od_liquid_press) * pressure_equalization_rate;
   }
 
   if (id_fan_fail) { if (heat_boost > 0) target_supply = 160.0f; else target_supply = set_id_temp; }
@@ -2486,7 +2489,11 @@ void runFurnaceControlSlice() {
   furnace_controller.update(current_w, furnace_physics.getIdSupplyTemp());
   furnace_physics.setAmbient(set_od_temp, set_id_temp, set_rh);
   furnace_physics.setRefrigerant(current_refrigerant, id_is_txv);
-  furnace_physics.update(current_y, gas_valve_active, current_g, blower_running, fault_active);
+  // Portal blower-fault simulations (1, 2, 6) must reach the engine like fault 24.
+  bool furnace_faults[57];
+  memcpy(furnace_faults, fault_active, sizeof(furnace_faults));
+  if (sim_active[1] || sim_active[2] || sim_active[6]) furnace_faults[24] = true;
+  furnace_physics.update(current_y, gas_valve_active, current_g, blower_running, furnace_faults);
   syncFurnaceTelemetryToUnifiedState();
 
   if (i2c_boards_present) {

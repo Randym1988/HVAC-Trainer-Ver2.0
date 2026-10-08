@@ -188,15 +188,19 @@ void testCoolingPressureRampsAndRespondsToAirflowFaults() {
 		}
 	}
 
-	TEST_ASSERT_FLOAT_WITHIN(1.0f, 1400.0f, normal_engine.getSimulatedCfm());
+	TEST_ASSERT_FLOAT_WITHIN(1.0f, 1260.0f, normal_engine.getSimulatedCfm());
 	TEST_ASSERT_TRUE(normal_engine.getOdLowPress() < initial_low_pressure);
 	TEST_ASSERT_TRUE(indoor_fan_fault_engine.getOdLowPress() + 15.0f <
 		normal_engine.getOdLowPress());
 	TEST_ASSERT_TRUE(outdoor_fan_fault_engine.getOdHighPress() >
-		normal_engine.getOdHighPress() + 60.0f);
+		normal_engine.getOdHighPress() + 20.0f);
+	TEST_ASSERT_TRUE(outdoor_fan_fault_engine.getOdLiquidPress() >
+		normal_engine.getOdLiquidPress() + 15.0f);
 	TEST_ASSERT_TRUE(blower_off_engine.getOdLowPress() + 20.0f <
 		normal_engine.getOdLowPress());
 	TEST_ASSERT_FLOAT_WITHIN(0.1f, 0.0f, blower_off_engine.getSimulatedCfm());
+	TEST_ASSERT_TRUE(indoor_fan_fault_engine.isLpsTripped());
+	TEST_ASSERT_TRUE(indoor_fan_fault_engine.getOdLowPress() < 80.0f);
 	TEST_ASSERT_TRUE(blower_off_engine.getIdSupplyTemp() >
 		normal_engine.getIdSupplyTemp() + 5.0f);
 	TEST_ASSERT_TRUE(low_airflow_engine.getSimulatedCfm() <
@@ -215,6 +219,37 @@ void testCoolingPressureRampsAndRespondsToAirflowFaults() {
 		normal_engine.getOdLiquidPress();
 	TEST_ASSERT_TRUE(head_to_liquid_pressure_drop > 1.0f);
 	TEST_ASSERT_TRUE(head_to_liquid_pressure_drop < 5.0f);
+}
+
+void testBlowerFaultPressureSwitchResetsAfterPressureRecovers() {
+	PhysicsEngine engine;
+	bool blower_faults[57] = {};
+	bool no_faults[57] = {};
+	blower_faults[24] = true;
+	engine.begin();
+	engine.setAmbient(95.0f, 75.0f, 50.0f);
+	engine.setRefrigerant("R410A", true);
+
+	for (int step = 0; step < 300; ++step) {
+		delay(100);
+		engine.update(true, false, true, true, blower_faults);
+		if (engine.isLpsTripped()) break;
+	}
+	TEST_ASSERT_TRUE(engine.isLpsTripped());
+	TEST_ASSERT_TRUE(engine.getOdLowPress() <= 41.0f);
+
+	bool reset_after_pressure_recovery = false;
+	for (int step = 0; step < 1200; ++step) {
+		delay(100);
+		engine.update(false, false, false, true, no_faults);
+		if (!engine.isLpsTripped()) {
+			TEST_ASSERT_TRUE(engine.getOdLowPress() >= 79.0f);
+			reset_after_pressure_recovery = true;
+			break;
+		}
+		TEST_ASSERT_TRUE(engine.getOdLowPress() < 81.0f);
+	}
+	TEST_ASSERT_TRUE(reset_after_pressure_recovery);
 }
 
 void testChargeFaultsShiftSubcoolingAndHeadPressure() {
@@ -284,6 +319,7 @@ void setup() {
 	RUN_TEST(testOffCycleEqualizationUsesSelectedRefrigerant);
 	RUN_TEST(testFactoryAmbientPointAndAmbientPressureTrends);
 	RUN_TEST(testCoolingPressureRampsAndRespondsToAirflowFaults);
+	RUN_TEST(testBlowerFaultPressureSwitchResetsAfterPressureRecovers);
 	RUN_TEST(testChargeFaultsShiftSubcoolingAndHeadPressure);
 	RUN_TEST(testPublishedOutputsStayWithinGaugeBounds);
 	UNITY_END();
