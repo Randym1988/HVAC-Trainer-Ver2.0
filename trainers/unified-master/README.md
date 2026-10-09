@@ -139,6 +139,14 @@ Board endpoints: `GET /api/users` (add `?hashes=1` for full hashes), `POST /api/
 The Docker engine answers UDP broadcasts on port 4210. A packet containing `DISCOVER_HVAC_TRAINER` gets a JSON reply (`service`, `version`, `http_port`, `mqtt_port`, `hostname`). The mobile app broadcasts this at launch for 3 seconds: one reply connects automatically, several show a selection dialog, none shows a manual-address dialog with Retry Discovery. Set `DISCOVERY_HOSTNAME` in the engine environment to change the advertised name. On a Linux Docker host, published ports may not receive LAN broadcasts; use `network_mode: host` for the engine there.
 
 
+## Relay Safe State
+
+- Relays are active-low. At the very start of `setup()` (before Wi-Fi or LittleFS) every relay is released except Board 1 P0/P4/P8, which are held energized in the normal no-fault state. The PCF8575 latches outputs through a crash or reset, so this also recovers relays after a watchdog or panic reset.
+- The same safe state is applied before OTA, web-update, and scheduled reboots, and by the fault reset.
+- In furnace mode, the fault reset also resets `FurnaceController` so the gas valve cannot reopen without a fresh purge/ignition sequence.
+- In furnace mode, `/api/toggle` returns 409 for `hs1_t1`, `hs1_t2`, `hs1_t3` and `hs2_t1` (Board 2 P0-P3 are inducer/igniter/gas valve/blower, owned by `FurnaceController`).
+- Software-validated only (build). Verify on the bench with the relay checklist before field use.
+
 ## Wi-Fi Recovery (AP Mode)
 
 If the saved Wi-Fi is not found at boot (after also trying the built-in default), or is lost for 60 seconds while running, the board starts the setup AP `Vexera Core Trainer` (LED purple) and keeps retrying the saved network every 60 seconds. Retries pause while a phone is connected to the AP.

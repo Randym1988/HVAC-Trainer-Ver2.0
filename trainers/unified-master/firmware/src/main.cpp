@@ -16,6 +16,8 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <mbedtls/md.h>
+#include <esp_task_wdt.h>
+#include <esp_system.h>
 #include "main.h"
 #include <AsyncMqttClient.h>
 #include "FurnaceController.h"
@@ -207,6 +209,7 @@ String wifi_setup_state = "idle"; // idle | connecting | connected | failed
 bool pending_reboot = false;
 uint32_t reboot_timer = 0;
 bool i2c_boards_present = false;
+int8_t furnace_ac_relay_state = -1; // Last AC-path relay pattern written in furnace mode; -1 forces a rewrite.
 AsyncMqttClient mqttClient;
 TimerHandle_t mqttReconnectTimer;
 
@@ -238,6 +241,23 @@ void syncFurnaceTelemetryToUnifiedState();
 void runCommsSlice();
 void runControlSlice();
 void commTask(void* parameter);
+static const uint32_t TASK_WDT_TIMEOUT_MS = 30000;
+static const char* resetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "other_wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_EXT: return "external";
+    default: return "unknown";
+  }
+}
+template <typename Doc>
+static void addHealthDiagnostics(Doc& doc);
 void controlTask(void* parameter);
 void heartbeatTask(void* parameter);
 uint32_t getModeConnectedLedColor();
@@ -360,6 +380,36 @@ void detectI2CBoards() {
   } else {
     Serial.println("I2C relay boards not detected. Running in no-relay mode.");
   }
+}
+
+// Relays are active-low. Every pin is released (HIGH = de-energized) except the
+// board_1 P0/P4/P8 relays, which are held energized in the normal (no-fault) state.
+void applySafeRelayOutputs() {
+  if (!i2c_boards_present) return;
+  for (int i = 0; i < 16; i++) { board_1.digitalWrite(i, HIGH); board_2.digitalWrite(i, HIGH); board_3.digitalWrite(i, HIGH); }
+  board_1.digitalWrite(0, LOW); board_1.digitalWrite(4, LOW); board_1.digitalWrite(8, LOW);
+}
+
+// The PCF8575 latches its outputs through an ESP32 reset/crash, so this must run first in setup().
+// Pins must be declared OUTPUT before begin(): the library masks every write with the
+// output-mode bits, and with no outputs declared each write would drive all 16 pins LOW.
+void initRelayBoardsSafe() {
+  if (!Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN)) {
+    i2c_boards_present = false;
+    Serial.printf("I2C init failed on SDA=%d/SCL=%d. Running in no-relay mode.\n", I2C_SDA_PIN, I2C_SCL_PIN);
+    return;
+  }
+  detectI2CBoards();
+  if (!i2c_boards_present) return;
+  for (int i = 0; i < 16; i++) {
+    board_1.pinMode(i, OUTPUT, HIGH);
+    board_2.pinMode(i, OUTPUT, HIGH);
+    board_3.pinMode(i, OUTPUT, HIGH);
+  }
+  board_1.begin();
+  board_2.begin();
+  board_3.begin();
+  applySafeRelayOutputs();
 }
 
 String loadEngineBaseUrl() {
@@ -558,6 +608,7 @@ String getStatusJSON() {
   
   doc["wifi_rssi"] = is_ap_mode ? 0 : WiFi.RSSI();
   doc["ram"] = ESP.getFreeHeap();
+  addHealthDiagnostics(doc);
   doc["uptime"] = uptime_str;
   doc["clients"] = ws.count();
   doc["diagnosis"] = latest_diagnosis;
@@ -1031,10 +1082,14 @@ void reset_all_faults_and_sims() {
   
   limit_trip_count = 0;
 
-  if (i2c_boards_present) {
-    for (int i = 0; i < 16; i++) { board_1.digitalWrite(i, HIGH); board_2.digitalWrite(i, HIGH); board_3.digitalWrite(i, HIGH); }
-    board_1.digitalWrite(0, LOW); board_1.digitalWrite(4, LOW); board_1.digitalWrite(8, LOW);
-  }
+  applySafeRelayOutputs();
+
+  // Keep the furnace state machine in step with the relays it just lost, so it can't
+  // re-open the gas valve later without a fresh purge/ignition sequence.
+  if (active_trainer_type == STRAIGHT_AC_FURNACE) furnace_controller.reset();
+  // Forget the last thermostat inputs so an active call re-fires its relay edges.
+  last_w_state = false; last_y_state = false; last_o_state = false;
+  furnace_ac_relay_state = -1;
 
   reset_counter++;
 }
@@ -1399,6 +1454,7 @@ String htmlEscape(const String& in) {
 void setup() {
   Serial.begin(115200);
   Serial.println("BOOT: setup entered");
+  initRelayBoardsSafe(); // Before anything that can block (Wi-Fi) or return early (LittleFS).
   // --- FIX: Determine identity FIRST, so all subsequent services get the right name ---
   detectTrainerTypeAtBoot();
   applyTrainerIdentityMetadata();
@@ -1471,6 +1527,7 @@ void setup() {
   });
   ArduinoOTA.onEnd([]() {
     ota_in_progress = false;
+    applySafeRelayOutputs(); // ArduinoOTA reboots right after this; relays would otherwise stay latched.
     setStatusLeds(status_led.Color(0, 255, 0)); // Green on success
     Serial.println("\nEnd");
   });
@@ -1494,18 +1551,6 @@ void setup() {
   pinMode(PIN_BLOWER_MONITOR, INPUT_PULLUP);
   pinMode(PIN_GAS_VALVE_MONITOR, INPUT_PULLUP);
 
-  bool wire_ok = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  if (!wire_ok) {
-    i2c_boards_present = false;
-    Serial.printf("I2C init failed on SDA=%d/SCL=%d. Running in no-relay mode.\n", I2C_SDA_PIN, I2C_SCL_PIN);
-  } else {
-    detectI2CBoards();
-  }
-  if (i2c_boards_present) {
-    board_1.begin();
-    board_2.begin();
-    board_3.begin();
-  }
   reset_all_faults_and_sims();
   if (active_trainer_type == STRAIGHT_AC_FURNACE) {
     furnace_controller.begin();
@@ -1565,6 +1610,7 @@ void setup() {
     response->addHeader("Connection", "close");
     request->send(response);
     if (!Update.hasError()) {
+        applySafeRelayOutputs();
         delay(1000);
         ESP.restart();
     }
@@ -2079,7 +2125,18 @@ scan(false);
         int f = id.substring(1).toInt();
         applyFaultToggle(f, state);
       } else {
-        if (id == "hs1_t1") board_2.digitalWrite(0, val_inv); 
+        // In furnace mode board_2 P0-P3 are inducer/igniter/gas valve/blower and belong to
+        // FurnaceController's sequence; driving them directly could open gas with no inducer.
+        if (active_trainer_type == STRAIGHT_AC_FURNACE &&
+            (id == "hs1_t1" || id == "hs1_t2" || id == "hs1_t3" || id == "hs2_t1")) {
+          request->send(409, "text/plain", "Relay is controlled by the furnace sequence");
+          return;
+        }
+        if (!i2c_boards_present) {
+          request->send(503, "text/plain", "Relay boards not present");
+          return;
+        }
+        if (id == "hs1_t1") board_2.digitalWrite(0, val_inv);
         else if (id == "hs1_t2") board_2.digitalWrite(1, val_inv); 
         else if (id == "hs1_t3") board_2.digitalWrite(2, val_inv); 
         else if (id == "hs2_t1") board_2.digitalWrite(3, val_inv); 
@@ -2131,6 +2188,11 @@ scan(false);
   });
 
   server.begin();
+
+  esp_task_wdt_deinit();
+  esp_err_t wdt_err = esp_task_wdt_init(TASK_WDT_TIMEOUT_MS / 1000, true);
+  if (wdt_err != ESP_OK) Serial.printf("Task watchdog init failed: %d\n", (int)wdt_err);
+  Serial.printf("Reset reason: %s\n", resetReasonText());
 
   BaseType_t comm_created = xTaskCreatePinnedToCore(
     commTask,
@@ -2224,6 +2286,7 @@ void sendEngineHeartbeat() {
   doc["trainer_type"] = TRAINER_TYPE;
   doc["wifi_rssi"] = WiFi.RSSI();
   doc["ram"] = ESP.getFreeHeap();
+  addHealthDiagnostics(doc);
   doc["uptime"] = uptime_str;
   doc["temp"] = 0.0;
   doc["diagnosis"] = latest_diagnosis;
@@ -2863,6 +2926,7 @@ void runCommsSlice() {
   ws.cleanupClients(); 
   
   if (pending_reboot && millis() > reboot_timer) {
+    applySafeRelayOutputs();
     ESP.restart();
   }
 
@@ -2955,15 +3019,14 @@ void runFurnaceControlSlice() {
 
   // AC-path relays on Board 2 follow the Y call (same behavior as the heat-pump path).
   if (i2c_boards_present) {
-    static int8_t last_ac_relay_state = -1;
     const int8_t ac_relay_state = (current_y ? 1 : 0) | (sim_active[15] ? 2 : 0);
-    if (ac_relay_state != last_ac_relay_state) {
+    if (ac_relay_state != furnace_ac_relay_state) {
       const int ac_level = current_y ? LOW : HIGH;
       board_2.digitalWrite(12, ac_level);
       board_2.digitalWrite(11, ac_level);
       board_2.digitalWrite(9, ac_level);
       board_2.digitalWrite(8, (current_y && !sim_active[15]) ? LOW : HIGH);
-      last_ac_relay_state = ac_relay_state;
+      furnace_ac_relay_state = ac_relay_state;
     }
   }
 
@@ -2993,9 +3056,19 @@ void runControlSlice() {
   }
 }
 
+template <typename Doc>
+static void addHealthDiagnostics(Doc& doc) {
+  doc["reset_reason"] = resetReasonText();
+  doc["min_free_heap"] = ESP.getMinFreeHeap();
+  if (comm_task_handle) doc["comm_stack_free"] = (uint32_t)uxTaskGetStackHighWaterMark(comm_task_handle);
+  if (control_task_handle) doc["control_stack_free"] = (uint32_t)uxTaskGetStackHighWaterMark(control_task_handle);
+}
+
 void commTask(void* parameter) {
   (void)parameter;
+  esp_task_wdt_add(nullptr);
   for (;;) {
+    esp_task_wdt_reset();
     runCommsSlice();
     vTaskDelay(pdMS_TO_TICKS(COMM_TASK_SLICE_MS));
   }
@@ -3003,7 +3076,9 @@ void commTask(void* parameter) {
 
 void controlTask(void* parameter) {
   (void)parameter;
+  esp_task_wdt_add(nullptr);
   for (;;) {
+    esp_task_wdt_reset();
     runControlSlice();
     vTaskDelay(pdMS_TO_TICKS(CONTROL_TASK_SLICE_MS));
   }
