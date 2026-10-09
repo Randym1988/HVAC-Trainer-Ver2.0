@@ -1142,6 +1142,22 @@
               <span class="nameplate-label">Aux Strips Max</span
               ><span class="nameplate-val">65.0 A</span>
             </div>
+            <div class="nameplate-item">
+              <span class="nameplate-label">Compressor</span
+              ><span class="nameplate-val" id="np_comp_model">--</span>
+            </div>
+            <div class="nameplate-item">
+              <span class="nameplate-label">Run Cap</span
+              ><span class="nameplate-val" id="np_run_cap">--</span>
+            </div>
+            <div class="nameplate-item">
+              <span class="nameplate-label">Start Cap</span
+              ><span class="nameplate-val" id="np_start_cap">--</span>
+            </div>
+            <div class="nameplate-item">
+              <span class="nameplate-label">Windings C-R / C-S / R-S</span
+              ><span class="nameplate-val" id="np_windings">--</span>
+            </div>
           </div>
 
           <div class="meter-buttons">
@@ -1192,9 +1208,23 @@
 
               <div class="data-grid" style="margin-bottom: 15px">
                 <div class="data-cell">
-                  <span class="label">Compressor Amps</span>
+                  <span class="label">Compressor Amps (C)</span>
                   <div>
                     <span class="val text-yellow" id="disp_comp_amps">0.0</span
+                    ><span class="unit">A</span>
+                  </div>
+                </div>
+                <div class="data-cell">
+                  <span class="label">Run Winding Amps (R)</span>
+                  <div>
+                    <span class="val" id="disp_comp_run_amps">0.0</span
+                    ><span class="unit">A</span>
+                  </div>
+                </div>
+                <div class="data-cell">
+                  <span class="label">Start Winding Amps (S)</span>
+                  <div>
+                    <span class="val" id="disp_comp_start_amps">0.0</span
                     ><span class="unit">A</span>
                   </div>
                 </div>
@@ -1225,7 +1255,8 @@
                 <div class="data-cell">
                   <span class="label">Line Voltage</span>
                   <div>
-                    <span class="val">241.5</span><span class="unit">VAC</span>
+                    <span class="val" id="disp_line_volts">241.5</span
+                    ><span class="unit">VAC</span>
                   </div>
                 </div>
                 <div class="data-cell">
@@ -1233,6 +1264,20 @@
                   <div>
                     <span class="val" id="disp_control_volts">27.2</span
                     ><span class="unit">VAC</span>
+                  </div>
+                </div>
+                <div class="data-cell">
+                  <span class="label">Run Cap Voltage</span>
+                  <div>
+                    <span class="val" id="disp_cap_volts">0.0</span
+                    ><span class="unit">VAC</span>
+                  </div>
+                </div>
+                <div class="data-cell">
+                  <span class="label">Run Cap (S A × 2652 ÷ V)</span>
+                  <div>
+                    <span class="val" id="disp_cap_uf">0.0</span
+                    ><span class="unit">µF</span>
                   </div>
                 </div>
                 <div class="data-cell" style="grid-column: span 2">
@@ -1550,6 +1595,11 @@
         idFan: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
         hs: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
         total: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        compRun: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        compStart: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        lineV: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 241.5 },
+        capV: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
+        capUf: { min: Infinity, max: -Infinity, sum: 0, count: 0, live: 0 },
       };
 
       function setMeterMode(mode) {
@@ -1600,6 +1650,20 @@
         return "0.0";
       }
 
+      function updateCompressorNameplate(data) {
+        if (!data.compressor_electrical_model) return;
+        let runOhms = parseFloat(data.winding_run_ohms);
+        let startOhms = parseFloat(data.winding_start_ohms);
+        document.getElementById("np_comp_model").textContent =
+          data.compressor_electrical_model;
+        document.getElementById("np_run_cap").textContent =
+          `${data.run_cap_rated_uf} µF / ${data.run_cap_rated_volts} V`;
+        document.getElementById("np_start_cap").textContent =
+          `${data.start_cap_uf_low}-${data.start_cap_uf_high} µF / ${data.start_cap_rated_volts} V`;
+        document.getElementById("np_windings").textContent =
+          `${runOhms.toFixed(2)} / ${startOhms.toFixed(2)} / ${(runOhms + startOhms).toFixed(2)} Ω`;
+      }
+
       function renderMeterScreen() {
         document.getElementById("disp_comp_amps").textContent =
           getMeterDisplayVal("comp");
@@ -1611,9 +1675,20 @@
           getMeterDisplayVal("hs");
         document.getElementById("disp_total_amps").textContent =
           getMeterDisplayVal("total");
+        document.getElementById("disp_comp_run_amps").textContent =
+          getMeterDisplayVal("compRun");
+        document.getElementById("disp_comp_start_amps").textContent =
+          getMeterDisplayVal("compStart");
+        document.getElementById("disp_line_volts").textContent =
+          getMeterDisplayVal("lineV");
+        document.getElementById("disp_cap_volts").textContent =
+          getMeterDisplayVal("capV");
+        document.getElementById("disp_cap_uf").textContent =
+          getMeterDisplayVal("capUf");
 
         let renderedTotal = parseFloat(getMeterDisplayVal("total"));
-        let calculatedWatts = Math.round(renderedTotal * 241.5);
+        let renderedVolts = parseFloat(getMeterDisplayVal("lineV")) || 241.5;
+        let calculatedWatts = Math.round(renderedTotal * renderedVolts);
         document.getElementById("disp_sys_watts").textContent = calculatedWatts;
       }
 
@@ -1768,6 +1843,12 @@
         updateMeterBuffer("idFan", iAmps);
         updateMeterBuffer("hs", hAmps);
         updateMeterBuffer("total", tAmps);
+        updateMeterBuffer("compRun", parseFloat(data.comp_run_amps));
+        updateMeterBuffer("compStart", parseFloat(data.comp_start_amps));
+        updateMeterBuffer("lineV", parseFloat(data.line_volts));
+        updateMeterBuffer("capV", parseFloat(data.run_cap_volts));
+        updateMeterBuffer("capUf", parseFloat(data.run_cap_uf));
+        updateCompressorNameplate(data);
 
         let ctrlV =
           data.lps_open || data.hps_open ? 0.0 : 27.2 + Math.random() * 0.3;

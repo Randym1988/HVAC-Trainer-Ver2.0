@@ -3,6 +3,35 @@
 
 #include <Arduino.h>
 
+struct CompressorOperatingPoint {
+    float capacity_btu_per_hour;
+    float power_watts;
+    float current_amps;
+    float mass_flow_lb_per_hour;
+};
+
+// Copeland electrical component data for a compressor (PSC with potential-relay start kit).
+struct CompressorElectricalSpec {
+    const char* model;
+    float run_cap_uf;
+    float run_cap_volts;
+    float start_cap_uf_low;
+    float start_cap_uf_high;
+    float start_cap_volts;
+    float start_winding_ohms;   // C-S
+    float run_winding_ohms;     // C-R
+    const char* potential_relay;
+};
+
+// What a meter would read on the running compressor circuit.
+struct CompressorElectricalReading {
+    float line_volts;           // L1-L2 at the contactor
+    float run_cap_volts;        // across the run capacitor (HERM-C)
+    float start_winding_amps;   // S lead (through the run capacitor)
+    float run_winding_amps;     // R lead
+    float run_cap_uf;           // in-circuit capacitance: start amps x 2652 / cap volts
+};
+
 class PhysicsEngine {
 public:
     PhysicsEngine();
@@ -17,6 +46,17 @@ public:
     static float evaluatePowerMap(float suction_temp_f, float discharge_temp_f);
     static float evaluateCurrentMap(float suction_temp_f, float discharge_temp_f);
     static float evaluateMassFlowMap(float suction_temp_f, float discharge_temp_f);
+    // Evaluates the compressor linked to the refrigerant (YA31K1E for R454B, ZP29K6E otherwise).
+    // Returns true when the chart was published for that refrigerant (no scaling needed).
+    static bool evaluateCompressorForRefrigerant(const String& refrigerant,
+        float suction_temp_f, float discharge_temp_f, CompressorOperatingPoint& out);
+    // Model name when the heat-pump trainer shares this refrigerant's compressor map, else nullptr.
+    static const char* heatPumpCompressorModelName(const String& refrigerant);
+    // Electrical data for the compressor linked to the refrigerant (YA31K1E for R454B, ZP29K6E otherwise).
+    static const CompressorElectricalSpec& compressorElectricalSpec(const String& refrigerant);
+    // Running meter readings derived from compressor (common) amps and total line amps.
+    static CompressorElectricalReading compressorElectricalReading(const String& refrigerant,
+        float comp_amps, float total_line_amps);
 
     float getCompAmps() const { return sim_comp_amps; }
     float getOdFanAmps() const { return sim_od_fan_amps; }

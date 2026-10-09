@@ -27,6 +27,12 @@ from typing import Any
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from aiomqtt import Client as MQTTClient, MqttError
 from discovery_service import DiscoveryService
+from compressor_maps import (
+    BYPASS_AMPS_FACTOR,
+    INEFFICIENT_AMPS_FACTOR,
+    compressor_electrical_reading,
+    evaluate_compressor,
+)
 
 app = FastAPI()
 
@@ -1258,14 +1264,22 @@ async def simulation_loop():
             ):  # Locked rotor or startup
                 state.sim_comp_amps = 143.0
             else:
-                amps = compressor_amps(
-                    sat_temp_f(state.sim_od_high_press, ref_mult),
-                    sat_temp_f(state.sim_od_low_press, ref_mult),
-                )
-                if fault_comp_bypass:
-                    amps -= 6.5
-                if fault_inefficient_comp:
-                    amps -= 5.0
+                sat_cond = sat_temp_f(state.sim_od_high_press, ref_mult)
+                sat_evap = sat_temp_f(state.sim_od_low_press, ref_mult)
+                chart = evaluate_compressor(state.current_refrigerant, sat_evap, sat_cond)
+                if chart is not None:
+                    # Published chart for this refrigerant; same fault factors as firmware.
+                    amps = chart.current_amps
+                    if fault_comp_bypass:
+                        amps *= BYPASS_AMPS_FACTOR
+                    if fault_inefficient_comp:
+                        amps *= INEFFICIENT_AMPS_FACTOR
+                else:
+                    amps = compressor_amps(sat_cond, sat_evap)
+                    if fault_comp_bypass:
+                        amps -= 6.5
+                    if fault_inefficient_comp:
+                        amps -= 5.0
                 state.sim_comp_amps = add_noise(amps, 0.2)
         else:
             state.sim_comp_amps = 0.0
@@ -1756,6 +1770,17 @@ async def get_status():
     # firmware-native keys like fXX/sim_XX/heat-strip relay aliases.
     if selected_edge and isinstance(selected_edge.get("telemetry"), dict):
         payload.update(selected_edge["telemetry"])
+
+    # Compressor circuit readings; boards on older firmware don't send these yet.
+    if payload.get("comp_amps") is not None:
+        line_amps = sum(
+            float(payload.get(key) or 0.0)
+            for key in ("comp_amps", "od_fan_amps", "id_fan_amps", "hs_amps")
+        )
+        for key, value in compressor_electrical_reading(
+            payload.get("refrigerant"), payload["comp_amps"], line_amps
+        ).items():
+            payload.setdefault(key, value)
 
     # Guarantee full fault/simulation key coverage for instructor UI rendering.
     for fault_idx in range(1, 57):

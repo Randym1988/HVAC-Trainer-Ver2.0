@@ -110,6 +110,115 @@ constexpr CompressorMapRow kCompressorMap[] = {
 	}},
 };
 
+// Copeland YA31K1E-PFV (3-ton), HFO-454B, 208/230-1-60, chart 99949-230 (printed 4/8/2025):
+// 20 F superheat, 15 F subcooling, 95 F ambient air over, current @ 230 V, nominal +/-5%.
+// Temperatures are saturated dew points. Blue-area points (reduce SH to meet DLT) are
+// included as published. The 145 F row has only the 55 F evaporating point.
+constexpr float kYa31EvaporatingTemperaturesF[9] = {
+	-10.0f, -5.0f, 0.0f, 10.0f, 25.0f, 35.0f, 55.0f, 70.0f, 77.0f,
+};
+
+constexpr CompressorMapRow kYa31CompressorMap[] = {
+	{50.0f, 0, 5, {
+		{17150.0f, 1135.0f, 5.4f, 152.0f}, {18800.0f, 1125.0f, 5.3f, 166.0f},
+		{20600.0f, 1120.0f, 5.3f, 181.0f}, {24800.0f, 1100.0f, 5.2f, 216.0f},
+		{32800.0f, 1050.0f, 5.0f, 282.0f},
+	}},
+	{70.0f, 0, 6, {
+		{13950.0f, 1425.0f, 6.6f, 133.0f}, {15900.0f, 1405.0f, 6.5f, 151.0f},
+		{17900.0f, 1390.0f, 6.5f, 169.0f}, {22200.0f, 1370.0f, 6.4f, 207.0f},
+		{29900.0f, 1335.0f, 6.2f, 275.0f}, {36300.0f, 1300.0f, 6.1f, 331.0f},
+	}},
+	{80.0f, 0, 7, {
+		{12250.0f, 1635.0f, 7.5f, 122.0f}, {14350.0f, 1610.0f, 7.4f, 142.0f},
+		{16450.0f, 1585.0f, 7.3f, 162.0f}, {20900.0f, 1555.0f, 7.2f, 203.0f},
+		{28600.0f, 1510.0f, 7.0f, 273.0f}, {34700.0f, 1480.0f, 6.9f, 329.0f},
+		{50700.0f, 1380.0f, 6.4f, 472.0f},
+	}},
+	{100.0f, 0, 8, {
+		{8400.0f, 2240.0f, 10.1f, 91.0f}, {10800.0f, 2190.0f, 9.9f, 117.0f},
+		{13200.0f, 2140.0f, 9.7f, 141.0f}, {17950.0f, 2070.0f, 9.3f, 190.0f},
+		{25700.0f, 1985.0f, 9.0f, 267.0f}, {31500.0f, 1945.0f, 8.8f, 325.0f},
+		{46100.0f, 1850.0f, 8.4f, 467.0f}, {60500.0f, 1755.0f, 8.0f, 606.0f},
+	}},
+	{110.0f, 1, 8, {
+		{8680.0f, 2580.0f, 11.6f, 98.0f}, {11200.0f, 2520.0f, 11.3f, 126.0f},
+		{16200.0f, 2420.0f, 10.8f, 180.0f}, {24000.0f, 2300.0f, 10.4f, 262.0f},
+		{29800.0f, 2240.0f, 10.1f, 322.0f}, {43800.0f, 2140.0f, 9.6f, 464.0f},
+		{57400.0f, 2040.0f, 9.2f, 602.0f}, {64900.0f, 1990.0f, 9.0f, 678.0f},
+	}},
+	{120.0f, 3, 6, {
+		{14200.0f, 2840.0f, 12.7f, 166.0f}, {22100.0f, 2680.0f, 12.0f, 254.0f},
+		{27800.0f, 2600.0f, 11.7f, 316.0f}, {41300.0f, 2470.0f, 11.1f, 460.0f},
+		{54200.0f, 2370.0f, 10.7f, 597.0f}, {61300.0f, 2320.0f, 10.4f, 672.0f},
+	}},
+	{130.0f, 4, 5, {
+		{19950.0f, 3140.0f, 14.0f, 242.0f}, {25600.0f, 3030.0f, 13.5f, 308.0f},
+		{38600.0f, 2860.0f, 12.8f, 455.0f}, {50900.0f, 2750.0f, 12.3f, 591.0f},
+		{57600.0f, 2700.0f, 12.1f, 666.0f},
+	}},
+	{140.0f, 5, 4, {
+		{23100.0f, 3540.0f, 15.8f, 295.0f}, {35700.0f, 3320.0f, 14.8f, 447.0f},
+		{47300.0f, 3190.0f, 14.2f, 584.0f}, {53600.0f, 3120.0f, 13.9f, 659.0f},
+	}},
+	{145.0f, 6, 1, {
+		{34100.0f, 3580.0f, 16.0f, 441.0f},
+	}},
+};
+
+constexpr CompressorElectricalSpec kZp29Electrical = {
+	// ZP29K6E-PFV R-410A 208/230-1-60 electrical components sheet.
+	"ZP29K6E-PFV", 45.0f, 370.0f, 88.0f, 106.0f, 330.0f, 1.58f, 0.92f, "040-0166-37",
+};
+
+constexpr CompressorElectricalSpec kYa31Electrical = {
+	// YA31K1E-PFV R-454B 208/230-1-60 electrical components sheet.
+	"YA31K1E-PFV", 40.0f, 370.0f, 88.0f, 106.0f, 330.0f, 1.43f, 0.72f, "040-0166-37",
+};
+
+struct CompressorProfile {
+	const char* model_name;
+	// Refrigerant the chart was published for; other refrigerants scale this map.
+	const char* native_refrigerant;
+	const float* evaporating_temps_f;
+	const CompressorMapRow* rows;
+	uint8_t row_count;
+	// Heat-pump trainer uses this map for compressor amps (otherwise its legacy formula).
+	bool shared_with_heat_pump;
+	const CompressorElectricalSpec* electrical;
+};
+
+constexpr CompressorProfile kZp29Profile = {
+	kCompressorModelName, "R410A", kEvaporatingTemperaturesF, kCompressorMap,
+	sizeof(kCompressorMap) / sizeof(kCompressorMap[0]), false, &kZp29Electrical,
+};
+
+constexpr CompressorProfile kYa31Profile = {
+	"Copeland YA31K1E-PFV (performance chart 99949-230)", "R454B",
+	kYa31EvaporatingTemperaturesF, kYa31CompressorMap,
+	sizeof(kYa31CompressorMap) / sizeof(kYa31CompressorMap[0]), true, &kYa31Electrical,
+};
+
+// Running-circuit model; mirrored in platform/docker-engine/backend/compressor_maps.py.
+constexpr float kNoLoadLineVolts = 241.5f;
+constexpr float kLineDropVoltsPerAmp = 0.1f;
+constexpr float kLockedRotorAmpsThreshold = 100.0f;
+constexpr float kRunningCapVoltsRatioBase = 1.48f;
+constexpr float kRunningCapVoltsRatioPerAmp = 0.012f;
+constexpr float kRunningCapVoltsRatioMin = 1.25f;
+constexpr float kRunningCapVoltsRatioMax = 1.5f;
+constexpr float kLockedRotorCapVoltsRatio = 0.6f;
+constexpr float kInCircuitCapFraction = 0.985f;
+constexpr float kMicrofaradConstant = 2652.0f;
+// Start-winding current leads run-winding current by ~100 degrees.
+constexpr float kWindingPhaseCos = -0.17365f;
+constexpr float kWindingPhaseSin = 0.98481f;
+
+const CompressorProfile& compressorProfileFor(const String& refrigerant) {
+	if (refrigerant.equalsIgnoreCase(kYa31Profile.native_refrigerant)) return kYa31Profile;
+	return kZp29Profile;
+}
+
 CompressorMapPoint interpolateMapPoint(const CompressorMapPoint& lower,
 									   const CompressorMapPoint& upper,
 									   float fraction) {
@@ -124,18 +233,19 @@ CompressorMapPoint interpolateMapPoint(const CompressorMapPoint& lower,
 }
 
 CompressorMapPoint evaluateMapRow(const CompressorMapRow& row,
+								  const float* evaporating_temps_f,
 								  float evaporating_temp_f) {
 	const uint8_t last_index = row.first_evaporating_index + row.point_count - 1;
-	if (evaporating_temp_f <= kEvaporatingTemperaturesF[row.first_evaporating_index]) {
+	if (evaporating_temp_f <= evaporating_temps_f[row.first_evaporating_index]) {
 		return row.points[0];
 	}
-	if (evaporating_temp_f >= kEvaporatingTemperaturesF[last_index]) {
+	if (evaporating_temp_f >= evaporating_temps_f[last_index]) {
 		return row.points[row.point_count - 1];
 	}
 	for (uint8_t offset = 0; offset < row.point_count - 1; ++offset) {
 		const uint8_t lower_index = row.first_evaporating_index + offset;
-		const float lower_temp = kEvaporatingTemperaturesF[lower_index];
-		const float upper_temp = kEvaporatingTemperaturesF[lower_index + 1];
+		const float lower_temp = evaporating_temps_f[lower_index];
+		const float upper_temp = evaporating_temps_f[lower_index + 1];
 		if (evaporating_temp_f <= upper_temp) {
 			const float fraction = (evaporating_temp_f - lower_temp) /
 				(upper_temp - lower_temp);
@@ -146,27 +256,35 @@ CompressorMapPoint evaluateMapRow(const CompressorMapRow& row,
 	return row.points[row.point_count - 1];
 }
 
-CompressorMapPoint evaluateCompressorMap(float evaporating_temp_f,
-										 float condensing_temp_f) {
-	const uint8_t row_count = sizeof(kCompressorMap) / sizeof(kCompressorMap[0]);
-	if (condensing_temp_f <= kCompressorMap[0].condensing_temp_f) {
-		return evaluateMapRow(kCompressorMap[0], evaporating_temp_f);
+CompressorMapPoint evaluateProfile(const CompressorProfile& profile,
+								   float evaporating_temp_f,
+								   float condensing_temp_f) {
+	const CompressorMapRow* rows = profile.rows;
+	const uint8_t row_count = profile.row_count;
+	const float* evaps = profile.evaporating_temps_f;
+	if (condensing_temp_f <= rows[0].condensing_temp_f) {
+		return evaluateMapRow(rows[0], evaps, evaporating_temp_f);
 	}
-	if (condensing_temp_f >= kCompressorMap[row_count - 1].condensing_temp_f) {
-		return evaluateMapRow(kCompressorMap[row_count - 1], evaporating_temp_f);
+	if (condensing_temp_f >= rows[row_count - 1].condensing_temp_f) {
+		return evaluateMapRow(rows[row_count - 1], evaps, evaporating_temp_f);
 	}
 	for (uint8_t index = 0; index < row_count - 1; ++index) {
-		const CompressorMapRow& lower_row = kCompressorMap[index];
-		const CompressorMapRow& upper_row = kCompressorMap[index + 1];
+		const CompressorMapRow& lower_row = rows[index];
+		const CompressorMapRow& upper_row = rows[index + 1];
 		if (condensing_temp_f <= upper_row.condensing_temp_f) {
 			const float fraction = (condensing_temp_f - lower_row.condensing_temp_f) /
 				(upper_row.condensing_temp_f - lower_row.condensing_temp_f);
 			return interpolateMapPoint(
-				evaluateMapRow(lower_row, evaporating_temp_f),
-				evaluateMapRow(upper_row, evaporating_temp_f), fraction);
+				evaluateMapRow(lower_row, evaps, evaporating_temp_f),
+				evaluateMapRow(upper_row, evaps, evaporating_temp_f), fraction);
 		}
 	}
-	return evaluateMapRow(kCompressorMap[row_count - 1], evaporating_temp_f);
+	return evaluateMapRow(rows[row_count - 1], evaps, evaporating_temp_f);
+}
+
+CompressorMapPoint evaluateCompressorMap(float evaporating_temp_f,
+										 float condensing_temp_f) {
+	return evaluateProfile(kZp29Profile, evaporating_temp_f, condensing_temp_f);
 }
 
 const RefrigerantModel& refrigerantModel(const String& name) {
@@ -223,7 +341,57 @@ float PhysicsEngine::evaluateMassFlowMap(float suction_temp_f, float discharge_t
 }
 
 const char* PhysicsEngine::getCompressorModelName() const {
-	return kCompressorModelName;
+	return compressorProfileFor(current_refrigerant).model_name;
+}
+
+bool PhysicsEngine::evaluateCompressorForRefrigerant(const String& refrigerant,
+		float suction_temp_f, float discharge_temp_f, CompressorOperatingPoint& out) {
+	const CompressorProfile& profile = compressorProfileFor(refrigerant);
+	const CompressorMapPoint point = evaluateProfile(profile, suction_temp_f, discharge_temp_f);
+	out.capacity_btu_per_hour = point.capacity_btu_per_hour;
+	out.power_watts = point.power_watts;
+	out.current_amps = point.current_amps;
+	out.mass_flow_lb_per_hour = point.mass_flow_lb_per_hour;
+	return refrigerant.equalsIgnoreCase(profile.native_refrigerant);
+}
+
+const char* PhysicsEngine::heatPumpCompressorModelName(const String& refrigerant) {
+	const CompressorProfile& profile = compressorProfileFor(refrigerant);
+	if (!profile.shared_with_heat_pump ||
+		!refrigerant.equalsIgnoreCase(profile.native_refrigerant)) return nullptr;
+	return profile.model_name;
+}
+
+const CompressorElectricalSpec& PhysicsEngine::compressorElectricalSpec(const String& refrigerant) {
+	return *compressorProfileFor(refrigerant).electrical;
+}
+
+CompressorElectricalReading PhysicsEngine::compressorElectricalReading(const String& refrigerant,
+		float comp_amps, float total_line_amps) {
+	const CompressorElectricalSpec& spec = compressorElectricalSpec(refrigerant);
+	CompressorElectricalReading reading = {};
+	reading.line_volts = kNoLoadLineVolts - kLineDropVoltsPerAmp * fmaxf(total_line_amps, 0.0f);
+	if (comp_amps < 0.5f) return reading;
+
+	float cap_volts_ratio;
+	float cap_uf_in_circuit;
+	if (comp_amps >= kLockedRotorAmpsThreshold) {
+		// Rotor not turning: little back-EMF and the potential relay holds the start cap in.
+		cap_volts_ratio = kLockedRotorCapVoltsRatio;
+		cap_uf_in_circuit = spec.run_cap_uf + 0.5f * (spec.start_cap_uf_low + spec.start_cap_uf_high);
+	} else {
+		cap_volts_ratio = constrain(kRunningCapVoltsRatioBase - kRunningCapVoltsRatioPerAmp * comp_amps,
+			kRunningCapVoltsRatioMin, kRunningCapVoltsRatioMax);
+		cap_uf_in_circuit = spec.run_cap_uf;
+	}
+	reading.run_cap_uf = cap_uf_in_circuit * kInCircuitCapFraction;
+	reading.run_cap_volts = reading.line_volts * cap_volts_ratio;
+	reading.start_winding_amps = reading.run_cap_volts * reading.run_cap_uf / kMicrofaradConstant;
+	const float s = reading.start_winding_amps;
+	// Common = phasor sum of run and start winding currents.
+	reading.run_winding_amps = -s * kWindingPhaseCos +
+		sqrtf(fmaxf(comp_amps * comp_amps - s * s * kWindingPhaseSin * kWindingPhaseSin, 0.0f));
+	return reading;
 }
 
 float PhysicsEngine::tempToPressure(float temp_f, String refrigerant) const {
@@ -388,6 +556,14 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	last_update_time = now;
 	const float dt = constrain(static_cast<float>(elapsed_ms) / 1000.0f, 0.0f, 0.25f);
 	const RefrigerantModel& refrigerant = refrigerantModel(current_refrigerant);
+	const CompressorProfile& compressor_profile = compressorProfileFor(current_refrigerant);
+	// A chart published for this refrigerant is used as-is; otherwise scale the R-410A map.
+	const bool native_compressor_map =
+		current_refrigerant.equalsIgnoreCase(compressor_profile.native_refrigerant);
+	const float map_capacity_multiplier =
+		native_compressor_map ? 1.0f : refrigerant.capacity_multiplier;
+	const float map_mass_flow_multiplier =
+		native_compressor_map ? 1.0f : refrigerant.mass_flow_multiplier;
 
 	const bool compressor_failed = has_faults && (faults[4] || faults[31]);
 	const bool pressure_switch_open = phys_lps_tripped || phys_hps_tripped ||
@@ -516,19 +692,19 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 			target_id_supply_temp = set_id_temp - sensible_delta_t;
 		}
 
-		const CompressorMapPoint compressor_map = evaluateCompressorMap(
-			current_evap_temp_f, current_cond_temp_f);
+		const CompressorMapPoint compressor_map = evaluateProfile(
+			compressor_profile, current_evap_temp_f, current_cond_temp_f);
 		compressor_map_current_amps = compressor_map.current_amps;
 		compressor_capacity_btu_per_hour = constrain(
-			compressor_map.capacity_btu_per_hour * refrigerant.capacity_multiplier *
+			compressor_map.capacity_btu_per_hour * map_capacity_multiplier *
 				compressor_capacity_factor,
 			0.0f, 60000.0f);
 		compressor_mass_flow_lb_per_hour = constrain(
-			compressor_map.mass_flow_lb_per_hour * refrigerant.mass_flow_multiplier *
+			compressor_map.mass_flow_lb_per_hour * map_mass_flow_multiplier *
 				evaporator_flow_factor,
 			0.0f, 1200.0f);
 		compressor_power_watts = constrain(
-			compressor_map.power_watts * refrigerant.capacity_multiplier *
+			compressor_map.power_watts * map_capacity_multiplier *
 				compressor_capacity_factor / compressor_efficiency_factor,
 			0.0f, 12000.0f);
 		heat_rejected_btu_per_hour =
@@ -600,7 +776,7 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 		: current_cond_temp_f + 8.0f;
 
 	float target_comp_amps = compressor_map_current_amps *
-		refrigerant.capacity_multiplier * compressor_capacity_factor /
+		map_capacity_multiplier * compressor_capacity_factor /
 		compressor_efficiency_factor;
 	if (compressor_running && now - comp_start_time < 1000) target_comp_amps += 3.0f;
 	const float target_od_fan_amps = compressor_running && !outdoor_fan_failed ? 0.9f : 0.0f;

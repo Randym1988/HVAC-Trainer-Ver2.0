@@ -32,6 +32,71 @@ void testZp29CompressorMapAtPublishedPoint() {
 		PhysicsEngine::evaluateMassFlowMap(42.5f, 122.5f));
 }
 
+void testYa31R454bCompressorMapMatchesChart() {
+	CompressorOperatingPoint point = {};
+	// Published point: 35 F evap / 110 F cond.
+	TEST_ASSERT_TRUE(PhysicsEngine::evaluateCompressorForRefrigerant(
+		"R454B", 35.0f, 110.0f, point));
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 29800.0f, point.capacity_btu_per_hour);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 2240.0f, point.power_watts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 10.1f, point.current_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 322.0f, point.mass_flow_lb_per_hour);
+	// Bilinear midpoint: 45 F evap / 115 F cond.
+	PhysicsEngine::evaluateCompressorForRefrigerant("R454B", 45.0f, 115.0f, point);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 35675.0f, point.capacity_btu_per_hour);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 2362.5f, point.power_watts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 10.625f, point.current_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 390.5f, point.mass_flow_lb_per_hour);
+	// R-410A keeps the ZP29K6E chart; other refrigerants scale it.
+	TEST_ASSERT_TRUE(PhysicsEngine::evaluateCompressorForRefrigerant(
+		"R410A", 45.0f, 130.0f, point));
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 29400.0f, point.capacity_btu_per_hour);
+	TEST_ASSERT_FALSE(PhysicsEngine::evaluateCompressorForRefrigerant(
+		"R32", 45.0f, 130.0f, point));
+	TEST_ASSERT_NOT_NULL(PhysicsEngine::heatPumpCompressorModelName("R454B"));
+	TEST_ASSERT_NULL(PhysicsEngine::heatPumpCompressorModelName("R410A"));
+
+	PhysicsEngine engine;
+	engine.begin();
+	engine.setRefrigerant("R454B", true);
+	TEST_ASSERT_EQUAL_STRING("Copeland YA31K1E-PFV (performance chart 99949-230)",
+		engine.getCompressorModelName());
+}
+
+void testCompressorElectricalFollowsRefrigerant() {
+	const CompressorElectricalSpec& ya31 = PhysicsEngine::compressorElectricalSpec("R454B");
+	TEST_ASSERT_EQUAL_STRING("YA31K1E-PFV", ya31.model);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 40.0f, ya31.run_cap_uf);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.43f, ya31.start_winding_ohms);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.72f, ya31.run_winding_ohms);
+	const CompressorElectricalSpec& zp29 = PhysicsEngine::compressorElectricalSpec("R410A");
+	TEST_ASSERT_EQUAL_STRING("ZP29K6E-PFV", zp29.model);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 45.0f, zp29.run_cap_uf);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.58f, zp29.start_winding_ohms);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.92f, zp29.run_winding_ohms);
+
+	CompressorElectricalReading running =
+		PhysicsEngine::compressorElectricalReading("R454B", 12.0f, 18.3f);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 239.67f, running.line_volts);
+	TEST_ASSERT_FLOAT_WITHIN(0.05f, 320.2f, running.run_cap_volts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 4.757f, running.start_winding_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 11.874f, running.run_winding_amps);
+	// Field check: start amps x 2652 / cap volts recovers the in-circuit capacitance.
+	TEST_ASSERT_FLOAT_WITHIN(0.05f, 39.4f,
+		running.start_winding_amps * 2652.0f / running.run_cap_volts);
+
+	running = PhysicsEngine::compressorElectricalReading("R410A", 12.0f, 18.3f);
+	TEST_ASSERT_FLOAT_WITHIN(0.05f, 44.3f, running.run_cap_uf);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 5.352f, running.start_winding_amps);
+
+	CompressorElectricalReading stopped =
+		PhysicsEngine::compressorElectricalReading("R454B", 0.0f, 4.5f);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 241.05f, stopped.line_volts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, stopped.run_cap_volts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, stopped.start_winding_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, stopped.run_cap_uf);
+}
+
 void testAllRefrigerantCurvesAreMonotonicAndInvertible() {
 	for (const char* refrigerant : kRefrigerants) {
 		float previous_bubble = -10000.0f;
@@ -315,6 +380,8 @@ void setup() {
 	delay(1000);
 	UNITY_BEGIN();
 	RUN_TEST(testZp29CompressorMapAtPublishedPoint);
+	RUN_TEST(testYa31R454bCompressorMapMatchesChart);
+	RUN_TEST(testCompressorElectricalFollowsRefrigerant);
 	RUN_TEST(testAllRefrigerantCurvesAreMonotonicAndInvertible);
 	RUN_TEST(testOffCycleEqualizationUsesSelectedRefrigerant);
 	RUN_TEST(testFactoryAmbientPointAndAmbientPressureTrends);

@@ -690,6 +690,27 @@ String getStatusJSON() {
     doc["relay_gas_valve"] = furnace_controller.isGasValveOn() ? 1 : 0;
     doc["relay_heat_blower"] = furnace_controller.isHeatBlowerOn() ? 1 : 0;
     doc["furnace_state"] = furnace_controller.getFurnaceState();
+  } else if (const char* hp_compressor = PhysicsEngine::heatPumpCompressorModelName(current_refrigerant)) {
+    doc["compressor_model"] = hp_compressor;
+  }
+  {
+    const CompressorElectricalSpec& comp_elec = PhysicsEngine::compressorElectricalSpec(current_refrigerant);
+    const CompressorElectricalReading comp_meter = PhysicsEngine::compressorElectricalReading(
+        current_refrigerant, sim_comp_amps, sim_comp_amps + sim_od_fan_amps + sim_id_fan_amps + sim_hs_amps);
+    doc["compressor_electrical_model"] = comp_elec.model;
+    doc["run_cap_rated_uf"] = comp_elec.run_cap_uf;
+    doc["run_cap_rated_volts"] = comp_elec.run_cap_volts;
+    doc["start_cap_uf_low"] = comp_elec.start_cap_uf_low;
+    doc["start_cap_uf_high"] = comp_elec.start_cap_uf_high;
+    doc["start_cap_rated_volts"] = comp_elec.start_cap_volts;
+    doc["winding_start_ohms"] = comp_elec.start_winding_ohms;
+    doc["winding_run_ohms"] = comp_elec.run_winding_ohms;
+    doc["potential_relay"] = comp_elec.potential_relay;
+    doc["line_volts"] = round(comp_meter.line_volts * 10.0f) / 10.0f;
+    doc["run_cap_volts"] = round(comp_meter.run_cap_volts * 10.0f) / 10.0f;
+    doc["run_cap_uf"] = round(comp_meter.run_cap_uf * 10.0f) / 10.0f;
+    doc["comp_start_amps"] = round(comp_meter.start_winding_amps * 10.0f) / 10.0f;
+    doc["comp_run_amps"] = round(comp_meter.run_winding_amps * 10.0f) / 10.0f;
   }
   // Export full fault/simulation bitfields so external instructor UIs can mirror every toggle state.
   for (int faultIdx = 1; faultIdx < 57; faultIdx++) {
@@ -2710,10 +2731,24 @@ void handle_telemetry() {
       } else if (now - comp_start_time < 400) {
           sim_comp_amps = 143.0f; 
       } else {
-          sim_comp_amps = 10.0f + (sim_od_high_press * 0.035f);
-          if (fault_comp_bypass) sim_comp_amps -= 6.5f; 
-          if (fault_inefficient_comp) sim_comp_amps -= 5.0f;
-          sim_comp_amps = add_noise(sim_comp_amps, 0.2f);
+          CompressorOperatingPoint compressor_point;
+          if (PhysicsEngine::heatPumpCompressorModelName(current_refrigerant) != nullptr &&
+              PhysicsEngine::evaluateCompressorForRefrigerant(
+                  current_refrigerant,
+                  temperatureAtSaturation(sim_od_low_press, true, 45.0f),
+                  temperatureAtSaturation(sim_od_high_press, true, 115.0f),
+                  compressor_point)) {
+              // Same chart and fault factors as the furnace trainer's PhysicsEngine.
+              float amps = compressor_point.current_amps;
+              if (fault_comp_bypass) amps *= 0.5f;
+              if (fault_inefficient_comp) amps *= 0.7f / 0.9f;
+              sim_comp_amps = add_noise(amps, 0.2f);
+          } else {
+              sim_comp_amps = 10.0f + (sim_od_high_press * 0.035f);
+              if (fault_comp_bypass) sim_comp_amps -= 6.5f; 
+              if (fault_inefficient_comp) sim_comp_amps -= 5.0f;
+              sim_comp_amps = add_noise(sim_comp_amps, 0.2f);
+          }
       }
   } else {
       sim_comp_amps = 0.0f;
