@@ -67,7 +67,11 @@ jobs:
             --volume "$PWD/platform/docker-engine/mosquitto/data:/mosquitto/data" \
             --entrypoint mosquitto_passwd eclipse-mosquitto:2 \
             -b /mosquitto/data/passwd trainer02 "$trainer02_password"
-          chmod 644 platform/docker-engine/mosquitto/data/passwd
+          # mosquitto_passwd runs as root in the container, so fix permissions there too.
+          docker run --rm \
+            --volume "$PWD/platform/docker-engine/mosquitto/data:/mosquitto/data" \
+            --entrypoint chmod eclipse-mosquitto:2 \
+            644 /mosquitto/data/passwd
 
       - name: Validate Compose configuration
         run: docker compose -f platform/docker-engine/docker-compose.yml config --quiet
