@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import os
 from getpass import getpass
 
 import main
@@ -49,21 +51,40 @@ def set_password(username: str, password: str) -> None:
 def delete_user(username: str) -> None:
     username = _validate_username(username)
     users = main.load_users_db()
-    record = users.get(username)
-    if not isinstance(record, dict):
-        raise ValueError(f"User {username!r} does not exist")
-
-    is_admin = record.get("role") in {"admin", "instructor"}
-    remaining_admins = sum(
-        item.get("role") in {"admin", "instructor"}
-        for other_name, item in users.items()
-        if other_name != username and isinstance(item, dict)
-    )
-    if is_admin and remaining_admins == 0:
-        raise ValueError("Cannot remove the last administrator")
+    main.ensure_user_removable(users, username)
 
     del users[username]
     main.write_json_atomically(main.USERS_DB_FILE, users)
+
+
+def list_users(show_hashes: bool = False) -> list[str]:
+    users = main.load_users_db()
+    lines = [f"{'USER':<24}{'ROLE':<12}PASSWORD HASH"]
+    for username in sorted(users, key=str.lower):
+        record = users[username]
+        if not isinstance(record, dict):
+            continue
+        if show_hashes:
+            stored = str(record.get("pw_hash") or "(plaintext - rotate required)")
+        else:
+            stored = main.describe_user_record(username, record)["hash_scheme"]
+        role = str(record.get("role", "student"))
+        lines.append(f"{username:<24}{role:<12}{stored}")
+    return lines
+
+
+def export_users(path: str) -> int:
+    """Write every account and its salted password hash to a private JSON backup."""
+    users = main.load_users_db()
+    exported = {
+        name: {"role": record.get("role", "student"), "pw_hash": record.get("pw_hash")}
+        for name, record in users.items()
+        if isinstance(record, dict)
+    }
+    main.write_json_atomically(path, exported)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
+    return len(exported)
 
 
 def _prompt_password() -> str:
@@ -88,8 +109,23 @@ def main_cli() -> int:
     delete_command = commands.add_parser("delete-user")
     delete_command.add_argument("username")
 
+    list_command = commands.add_parser("list-users")
+    list_command.add_argument(
+        "--show-hashes", action="store_true", help="print full salted password hashes"
+    )
+
+    export_command = commands.add_parser("export-users")
+    export_command.add_argument("path", help="backup file to write (contains hashes)")
+
     arguments = parser.parse_args()
     try:
+        if arguments.command == "list-users":
+            print("\n".join(list_users(arguments.show_hashes)))
+            return 0
+        if arguments.command == "export-users":
+            count = export_users(arguments.path)
+            print(f"Exported {count} accounts to {arguments.path}")
+            return 0
         if arguments.command == "bootstrap-admin":
             bootstrap_admin(arguments.username, _prompt_password())
         elif arguments.command == "set-password":

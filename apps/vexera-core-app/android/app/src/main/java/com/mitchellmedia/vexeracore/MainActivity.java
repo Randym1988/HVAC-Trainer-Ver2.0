@@ -7,6 +7,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(UdpDiscoveryPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Check if running on Android 12 (API 31) or higher

@@ -15,6 +15,7 @@
 #include <NimBLEDevice.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <mbedtls/md.h>
 #include "main.h"
 #include <AsyncMqttClient.h>
 #include "FurnaceController.h"
@@ -176,6 +177,7 @@ String authToken = "";
 const char* OTA_AUTH_USERNAME = "trainer";
 const char* OTA_AUTH_PASSWORD = "Mitchell2019!";
 String authRole = "";
+String authUser = "";
 String bleAuthenticatedPeer = "";
 uint32_t authExpiry = 0;
 const uint32_t AUTH_TOKEN_TTL = 28800;
@@ -186,6 +188,22 @@ uint32_t wifi_connected_flash_until = 0;
 const uint32_t WIFI_CONNECTING_GRACE_MS = 15000;
 const uint32_t WIFI_CONNECTED_FLASH_MS = 10000;
 const uint32_t WIFI_AP_FAILOVER_MS = 60000;
+const uint32_t AP_RETRY_INTERVAL_MS = 60000;        // how often AP mode retries the saved network (skipped while a client is on the AP)
+const uint32_t AP_GRACE_AFTER_CONNECT_MS = 30000;   // keep the AP up briefly so the setup page can show the result
+const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
+const char* DEFAULT_WIFI_SSID = "ComfortSC";
+const char* DEFAULT_WIFI_PASS = "8037945526";
+bool network_services_started = false;
+bool network_services_needed = false;
+bool mqtt_configured = false;
+uint32_t services_last_try = 0;
+uint32_t ap_stop_at = 0;
+volatile bool wifi_change_requested = false;
+bool wifi_attempt_active = false;
+uint32_t wifi_attempt_started = 0;
+String wifi_pending_ssid = "";
+String wifi_pending_pass = "";
+String wifi_setup_state = "idle"; // idle | connecting | connected | failed
 bool pending_reboot = false;
 uint32_t reboot_timer = 0;
 bool i2c_boards_present = false;
@@ -414,6 +432,10 @@ String discoverEngineBaseUrl(bool allowStored = true) {
 }
 
 void initUserDatabase() {
+  // Finish an interrupted atomic users.json update.
+  if (!LittleFS.exists("/users.json") && LittleFS.exists("/users.json.tmp")) {
+    LittleFS.rename("/users.json.tmp", "/users.json");
+  }
   if (!LittleFS.exists("/users.json")) {
     File f = LittleFS.open("/users.json", FILE_WRITE);
     f.print("{\"admin\":{\"pw\":\"VexeraAdmin\",\"role\":\"instructor\"},\"student1\":{\"pw\":\"hvac2026\",\"role\":\"student\"}}");
@@ -714,17 +736,140 @@ class MyServerCallbacks: public NimBLEServerCallbacks {
 
 void logLogin(String username, String role); // Forward declaration
 
-bool checkCredentials(String user, String pass) {
-  user.toLowerCase();
+// Passwords are stored as salted PBKDF2-SHA256 hashes in the same format as the engine:
+// pbkdf2_sha256$<rounds>$<salt hex>$<digest hex>. They cannot be read back, only reset.
+const uint32_t USER_HASH_ROUNDS = 8000;
+const uint32_t USER_HASH_MAX_ROUNDS = 50000;
+
+String bytesToHex(const uint8_t* data, size_t len) {
+  static const char digits[] = "0123456789abcdef";
+  String out;
+  out.reserve(len * 2);
+  for (size_t i = 0; i < len; i++) {
+    out += digits[data[i] >> 4];
+    out += digits[data[i] & 0x0F];
+  }
+  return out;
+}
+
+bool hexToBytes(const String& hex, uint8_t* out, size_t maxLen, size_t& outLen) {
+  if (hex.length() == 0 || (hex.length() % 2) != 0 || hex.length() / 2 > maxLen) return false;
+  outLen = hex.length() / 2;
+  for (size_t i = 0; i < outLen; i++) {
+    char pair[3] = {hex[i * 2], hex[i * 2 + 1], 0};
+    char* end = nullptr;
+    out[i] = static_cast<uint8_t>(strtoul(pair, &end, 16));
+    if (end != pair + 2) return false;
+  }
+  return true;
+}
+
+bool pbkdf2Sha256(const String& password, const uint8_t* salt, size_t saltLen,
+                  uint32_t rounds, uint8_t out[32]) {
+  if (saltLen == 0 || saltLen > 60 || rounds == 0) return false;
+  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (!info) return false;
+  mbedtls_md_context_t ctx;
+  mbedtls_md_init(&ctx);
+  if (mbedtls_md_setup(&ctx, info, 1) != 0) { mbedtls_md_free(&ctx); return false; }
+
+  const uint8_t* key = reinterpret_cast<const uint8_t*>(password.c_str());
+  uint8_t saltBlock[64];
+  memcpy(saltBlock, salt, saltLen);
+  saltBlock[saltLen] = 0; saltBlock[saltLen + 1] = 0; saltBlock[saltLen + 2] = 0; saltBlock[saltLen + 3] = 1;
+
+  uint8_t u[32];
+  bool ok = mbedtls_md_hmac_starts(&ctx, key, password.length()) == 0 &&
+            mbedtls_md_hmac_update(&ctx, saltBlock, saltLen + 4) == 0 &&
+            mbedtls_md_hmac_finish(&ctx, u) == 0;
+  if (ok) {
+    memcpy(out, u, 32);
+    for (uint32_t i = 1; i < rounds && ok; i++) {
+      ok = mbedtls_md_hmac_reset(&ctx) == 0 &&
+           mbedtls_md_hmac_update(&ctx, u, 32) == 0 &&
+           mbedtls_md_hmac_finish(&ctx, u) == 0;
+      for (int j = 0; j < 32; j++) out[j] ^= u[j];
+    }
+  }
+  mbedtls_md_free(&ctx);
+  return ok;
+}
+
+String hashUserPassword(const String& password) {
+  uint8_t salt[16];
+  for (size_t i = 0; i < sizeof(salt); i += 4) {
+    uint32_t r = esp_random();
+    memcpy(salt + i, &r, 4);
+  }
+  uint8_t digest[32];
+  if (!pbkdf2Sha256(password, salt, sizeof(salt), USER_HASH_ROUNDS, digest)) return String();
+  return "pbkdf2_sha256$" + String(USER_HASH_ROUNDS) + "$" + bytesToHex(salt, sizeof(salt)) +
+         "$" + bytesToHex(digest, sizeof(digest));
+}
+
+bool verifyUserPassword(const String& submitted, const String& stored) {
+  int first = stored.indexOf('$');
+  int second = first < 0 ? -1 : stored.indexOf('$', first + 1);
+  int third = second < 0 ? -1 : stored.indexOf('$', second + 1);
+  if (third < 0 || stored.substring(0, first) != "pbkdf2_sha256") return false;
+  uint32_t rounds = static_cast<uint32_t>(stored.substring(first + 1, second).toInt());
+  if (rounds == 0 || rounds > USER_HASH_MAX_ROUNDS) return false;
+  uint8_t salt[60], expected[32], actual[32];
+  size_t saltLen = 0, expectedLen = 0;
+  if (!hexToBytes(stored.substring(second + 1, third), salt, sizeof(salt), saltLen)) return false;
+  if (!hexToBytes(stored.substring(third + 1), expected, sizeof(expected), expectedLen) || expectedLen != 32) return false;
+  if (!pbkdf2Sha256(submitted, salt, saltLen, rounds, actual)) return false;
+  uint8_t diff = 0;
+  for (int i = 0; i < 32; i++) diff |= actual[i] ^ expected[i];
+  return diff == 0;
+}
+
+bool loadUsersDb(JsonDocument& db) {
   File f = LittleFS.open("/users.json", FILE_READ);
   if (!f) return false;
-  JsonDocument db;
   DeserializationError error = deserializeJson(db, f);
   f.close();
-  if (!error && !db[user].isNull() && db[user]["pw"].as<String>().equalsIgnoreCase(pass)) {
-    return true;
+  return !error && db.is<JsonObject>();
+}
+
+bool saveUsersDb(JsonDocument& db) {
+  File f = LittleFS.open("/users.json.tmp", FILE_WRITE);
+  if (!f) return false;
+  size_t written = serializeJson(db, f);
+  f.close();
+  if (written == 0) { LittleFS.remove("/users.json.tmp"); return false; }
+  if (LittleFS.rename("/users.json.tmp", "/users.json")) return true;
+  LittleFS.remove("/users.json");
+  return LittleFS.rename("/users.json.tmp", "/users.json");
+}
+
+void migrateUserPasswords() {
+  JsonDocument db;
+  if (!loadUsersDb(db)) return;
+  bool changed = false;
+  for (JsonPair entry : db.as<JsonObject>()) {
+    JsonObject record = entry.value().as<JsonObject>();
+    if (record.isNull() || record["pw"].isNull()) continue;
+    if (record["pw_hash"].isNull()) {
+      String hashed = hashUserPassword(record["pw"].as<String>());
+      if (hashed.length() == 0) continue;
+      record["pw_hash"] = hashed;
+    }
+    record.remove("pw");
+    changed = true;
   }
-  return false;
+  if (changed) saveUsersDb(db);
+}
+
+bool checkCredentials(String user, String pass) {
+  user.toLowerCase();
+  JsonDocument db;
+  if (!loadUsersDb(db) || db[user].isNull()) return false;
+  if (!db[user]["pw_hash"].isNull()) {
+    return verifyUserPassword(pass, db[user]["pw_hash"].as<String>());
+  }
+  // Only reachable if the boot-time hash migration could not write the file.
+  return !db[user]["pw"].isNull() && db[user]["pw"].as<String>().equalsIgnoreCase(pass);
 }
 
 String getUserRole(String user) {
@@ -788,6 +933,7 @@ class MyCallbacks: public NimBLECharacteristicCallbacks {
           if (checkCredentials(user, pass)) {
             authToken = generateAuthToken();
             authRole = getUserRole(user);
+            authUser = user;
             authExpiry = millis() + AUTH_TOKEN_TTL * 1000UL;
             bleAuthenticatedPeer = peerAddress;
             ble_login_status = "success";
@@ -1100,6 +1246,156 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   }
 }
 
+bool engineUrlOnLocalSubnet(const String& url) {
+  String host = url;
+  host.replace("http://", "");
+  int colon = host.indexOf(':');
+  if (colon != -1) host = host.substring(0, colon);
+  IPAddress ip;
+  if (!ip.fromString(host)) return true; // a hostname cannot be compared
+  IPAddress local = WiFi.localIP();
+  IPAddress mask = WiFi.subnetMask();
+  for (int i = 0; i < 4; i++) {
+    if ((ip[i] & mask[i]) != (local[i] & mask[i])) return false;
+  }
+  return true;
+}
+
+// Runs every time Wi-Fi comes up (boot, reconnect, or after joining a new network from AP setup).
+void startNetworkServices() {
+  network_services_needed = false;
+  services_last_try = millis();
+
+  if (network_services_started) MDNS.end();
+  if (MDNS.begin(OTA_HOSTNAME.c_str())) {
+    Serial.printf("MDNS responder started! Domain: %s.local\n", OTA_HOSTNAME.c_str());
+    MDNS.addService("http", "tcp", 80);
+  }
+  configTzTime("EST5EDT,M3.2.0,M11.1.0", "pool.ntp.org", "time.nist.gov");
+
+  // A stored engine address from a different subnet is stale after joining a new network.
+  String url = discoverEngineBaseUrl(true);
+  if (url.length() > 0 && !engineUrlOnLocalSubnet(url)) {
+    String found = discoverEngineBaseUrl(false);
+    if (found.length() > 0) url = found;
+  }
+  if (url.length() == 0) url = discoverEngineBaseUrl(false);
+  engine_base_url = url;
+  if (engine_base_url.length() > 0) saveEngineBaseUrl(engine_base_url);
+  Serial.printf("Engine endpoint: %s\n", engine_base_url.c_str());
+
+  if (!network_services_started) {
+    mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
+    if (loadMqttCredentials()) {
+      mqttClient.setCredentials(mqtt_username.c_str(), mqtt_password.c_str());
+      Serial.println("MQTT credentials loaded from device storage.");
+    }
+    mqttClient.onConnect(onMqttConnect);
+    mqttClient.onDisconnect(onMqttDisconnect);
+    mqttClient.onMessage(onMqttMessage);
+    network_services_started = true;
+  }
+
+  IPAddress mqtt_host;
+  String mqtt_host_str = engine_base_url;
+  mqtt_host_str.replace("http://", "");
+  int port_index = mqtt_host_str.indexOf(':');
+  if (port_index != -1) { mqtt_host_str = mqtt_host_str.substring(0, port_index); }
+  if (mqtt_host_str.length() > 0 && mqtt_host.fromString(mqtt_host_str)) {
+    mqttClient.setServer(mqtt_host, 1883);
+    mqtt_configured = true;
+    connectToMqtt();
+  } else {
+    mqtt_configured = false;
+    Serial.printf("Failed to configure MQTT host from engine URL: %s\n", engine_base_url.c_str());
+  }
+}
+
+// The setup AP stays up alongside the station interface (AP+STA) so the saved network can be retried.
+void startApMode() {
+  is_ap_mode = true;
+  ap_stop_at = 0;
+  if (setup_ap_active) return;
+  WiFi.setAutoReconnect(false); // background scans from auto-reconnect disturb AP clients
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.disconnect(false, false);
+  setup_ap_active = WiFi.softAP("Vexera Core Trainer", "8037945526");
+  dnsServer.start(53, "*", WiFi.softAPIP());
+  wifi_reconnect_timer = millis();
+  Serial.println("Setup AP active: 'Vexera Core Trainer' at 192.168.4.1/wifi-setup");
+}
+
+void stopApMode() {
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.setAutoReconnect(true);
+  setup_ap_active = false;
+  is_ap_mode = false;
+  ap_stop_at = 0;
+  Serial.println("Setup AP stopped; Wi-Fi station connection is up.");
+}
+
+// Alternates between the saved network and the built-in default so neither is abandoned.
+void retryWifiConnection() {
+  static bool tryDefault = false;
+  bool haveAlternate = wifi_ssid != DEFAULT_WIFI_SSID;
+  if (tryDefault && haveAlternate) {
+    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
+  } else {
+    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  }
+  tryDefault = haveAlternate && !tryDefault;
+}
+
+// New credentials are only persisted once the board actually joins the network.
+void handleWifiChangeRequest(uint32_t now) {
+  if (wifi_change_requested) {
+    wifi_change_requested = false;
+    wifi_attempt_active = true;
+    wifi_attempt_started = now;
+    WiFi.disconnect(false, false);
+    delay(150);
+    WiFi.begin(wifi_pending_ssid.c_str(), wifi_pending_pass.c_str());
+    Serial.printf("Trying new Wi-Fi network '%s'\n", wifi_pending_ssid.c_str());
+    return;
+  }
+  if (!wifi_attempt_active) return;
+
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == wifi_pending_ssid) {
+    JsonDocument doc;
+    doc["ssid"] = wifi_pending_ssid;
+    doc["pass"] = wifi_pending_pass;
+    File f = LittleFS.open("/wifi.json", FILE_WRITE);
+    if (f) { serializeJson(doc, f); f.close(); }
+    wifi_ssid = wifi_pending_ssid;
+    wifi_pass = wifi_pending_pass;
+    wifi_attempt_active = false;
+    wifi_setup_state = "connected";
+    Serial.printf("Joined '%s' and saved it as the Wi-Fi network.\n", wifi_ssid.c_str());
+  } else if ((now - wifi_attempt_started) >= WIFI_CONNECT_TIMEOUT_MS) {
+    wifi_attempt_active = false;
+    wifi_setup_state = "failed";
+    Serial.println("New Wi-Fi network failed; returning to the saved network.");
+    WiFi.disconnect(false, false);
+    delay(150);
+    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  }
+}
+
+String htmlEscape(const String& in) {
+  String out;
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";
+    else out += c;
+  }
+  return out;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("BOOT: setup entered");
@@ -1116,6 +1412,7 @@ void setup() {
 
   if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
   initUserDatabase();
+  migrateUserPasswords();
 
   loadWiFiConfig();
   if (wifi_ssid.length() == 0) {
@@ -1138,12 +1435,10 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
 
   if (WiFi.status() != WL_CONNECTED && wifi_ssid != "ComfortSC") {
-    Serial.println("Primary WiFi failed. Falling back to default SSID ComfortSC.");
-    wifi_ssid = "ComfortSC";
-    wifi_pass = "8037945526";
+    Serial.println("Primary WiFi failed. Trying default SSID ComfortSC (saved network is kept).");
     WiFi.disconnect(false, false);
     delay(150);
-    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
     attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
   }
@@ -1157,49 +1452,11 @@ void setup() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
 
-    // --- FIX: Discover engine URL once at startup and use it for both HTTP and MQTT ---
-    engine_base_url = discoverEngineBaseUrl(true); // Allow stored value first
-    if (engine_base_url.length() == 0) {
-      engine_base_url = discoverEngineBaseUrl(false); // Force discovery if not stored
-    }
-    if (engine_base_url.length() > 0) {
-      saveEngineBaseUrl(engine_base_url);
-    }
-
-    Serial.printf("Engine endpoint: %s\n", engine_base_url.c_str());
-    if (MDNS.begin(OTA_HOSTNAME.c_str())) {
-      Serial.printf("MDNS responder started! Domain: %s.local\n", OTA_HOSTNAME.c_str());
-      MDNS.addService("http", "tcp", 80); 
-    }
-    configTzTime("EST5EDT,M3.2.0,M11.1.0", "pool.ntp.org", "time.nist.gov");
-
-    // --- MQTT SETUP ---
-    mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
-    if (loadMqttCredentials()) {
-      mqttClient.setCredentials(mqtt_username.c_str(), mqtt_password.c_str());
-      Serial.println("MQTT credentials loaded from device storage.");
-    }
-    IPAddress mqtt_host;
-    String mqtt_host_str = engine_base_url;
-    mqtt_host_str.replace("http://", "");
-    int port_index = mqtt_host_str.indexOf(':');
-    if (port_index != -1) { mqtt_host_str = mqtt_host_str.substring(0, port_index); }
-    if (mqtt_host_str.length() > 0 && mqtt_host.fromString(mqtt_host_str)) {
-        mqttClient.setServer(mqtt_host, 1883);
-        mqttClient.onConnect(onMqttConnect);
-        mqttClient.onDisconnect(onMqttDisconnect);
-        mqttClient.onMessage(onMqttMessage);
-        connectToMqtt();
-    } else {
-      Serial.printf("Failed to configure MQTT host from engine URL: %s\n", engine_base_url.c_str());
-    }
+    startNetworkServices();
 
   } else {
-    is_ap_mode = true;
     wifi_was_connected = false;
-    WiFi.mode(WIFI_AP);
-    setup_ap_active = WiFi.softAP("Vexera Core Trainer", "8037945526");
-    dnsServer.start(53, "*", WiFi.softAPIP()); 
+    startApMode();
   }
   
   ArduinoOTA.setHostname(OTA_HOSTNAME.c_str());
@@ -1364,17 +1621,90 @@ void setup() {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, data, len);
     if (!error && !doc["user"].isNull() && !doc["pass"].isNull()) {
-      File f = LittleFS.open("/users.json", FILE_READ);
-      JsonDocument db; deserializeJson(db, f); f.close();
+      JsonDocument db;
+      if (!loadUsersDb(db)) { request->send(500, "text/plain", "User database unavailable"); return; }
       String newUser = doc["user"].as<String>(); newUser.toLowerCase();
-      db[newUser]["pw"] = doc["pass"].as<String>(); 
+      String hashed = hashUserPassword(doc["pass"].as<String>());
+      if (hashed.length() == 0) { request->send(500, "text/plain", "Hash failed"); return; }
+      db[newUser]["pw_hash"] = hashed;
+      db[newUser].remove("pw");
       db[newUser]["role"] = doc["role"].as<String>();
-      f = LittleFS.open("/users.json", FILE_WRITE); serializeJson(db, f); f.close();
+      if (!saveUsersDb(db)) { request->send(500, "text/plain", "Save failed"); return; }
       logLogin("SYSTEM", "Created/Updated Profile: " + newUser);
       request->send(200, "text/plain", "User Encoded");
     } else {
       request->send(400, "text/plain", "Bad Request");
     }
+  });
+
+  // Lists accounts. Full salted hashes are only included with ?hashes=1 (for backups).
+  server.on("/api/users", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!requireTrainerSession(request)) return;
+    JsonDocument db;
+    if (!loadUsersDb(db)) { request->send(500, "text/plain", "User database unavailable"); return; }
+    const bool includeHashes = request->hasParam("hashes");
+    JsonDocument out;
+    JsonArray users = out["users"].to<JsonArray>();
+    for (JsonPair entry : db.as<JsonObject>()) {
+      JsonObject item = users.add<JsonObject>();
+      String stored = entry.value()["pw_hash"] | "";
+      int first = stored.indexOf('$');
+      int second = first < 0 ? -1 : stored.indexOf('$', first + 1);
+      int third = second < 0 ? -1 : stored.indexOf('$', second + 1);
+      item["user"] = entry.key().c_str();
+      item["role"] = entry.value()["role"] | "student";
+      item["hash_scheme"] = third < 0 ? "none" : stored.substring(0, second);
+      item["hash_fingerprint"] = third < 0 ? "" : stored.substring(third + 1, third + 13);
+      if (includeHashes) item["pw_hash"] = stored;
+    }
+    String payload;
+    serializeJson(out, payload);
+    request->send(200, "application/json", payload);
+  });
+
+  server.on("/api/users/delete", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!requireTrainerSession(request)) return;
+    if (!request->hasParam("user", true)) { request->send(400, "text/plain", "Bad Request"); return; }
+    String target = request->getParam("user", true)->value();
+    target.trim();
+    target.toLowerCase();
+    if (target == authUser) { request->send(400, "text/plain", "You cannot delete your own account"); return; }
+    JsonDocument db;
+    if (!loadUsersDb(db)) { request->send(500, "text/plain", "User database unavailable"); return; }
+    if (db[target].isNull()) { request->send(404, "text/plain", "User does not exist"); return; }
+    String targetRole = db[target]["role"] | "student";
+    if (targetRole == "admin" || targetRole == "instructor") {
+      int otherAdmins = 0;
+      for (JsonPair entry : db.as<JsonObject>()) {
+        String role = entry.value()["role"] | "student";
+        if (String(entry.key().c_str()) != target && (role == "admin" || role == "instructor")) otherAdmins++;
+      }
+      if (otherAdmins == 0) { request->send(400, "text/plain", "Cannot remove the last administrator"); return; }
+    }
+    db.remove(target);
+    if (!saveUsersDb(db)) { request->send(500, "text/plain", "Save failed"); return; }
+    logLogin("SYSTEM", "Deleted Profile: " + target);
+    request->send(200, "text/plain", "OK");
+  });
+
+  server.on("/api/users/reset-password", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!requireTrainerSession(request)) return;
+    if (!request->hasParam("user", true) || !request->hasParam("pass", true)) { request->send(400, "text/plain", "Bad Request"); return; }
+    String target = request->getParam("user", true)->value();
+    target.trim();
+    target.toLowerCase();
+    String newPassword = request->getParam("pass", true)->value();
+    if (newPassword.length() < 3 || newPassword.length() > 128) { request->send(400, "text/plain", "Password must be 3-128 characters"); return; }
+    JsonDocument db;
+    if (!loadUsersDb(db)) { request->send(500, "text/plain", "User database unavailable"); return; }
+    if (db[target].isNull()) { request->send(404, "text/plain", "User does not exist"); return; }
+    String hashed = hashUserPassword(newPassword);
+    if (hashed.length() == 0) { request->send(500, "text/plain", "Hash failed"); return; }
+    db[target]["pw_hash"] = hashed;
+    db[target].remove("pw");
+    if (!saveUsersDb(db)) { request->send(500, "text/plain", "Save failed"); return; }
+    logLogin("SYSTEM", "Password Reset: " + target);
+    request->send(200, "text/plain", "OK");
   });
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1400,6 +1730,7 @@ void setup() {
       authRole = "student";
     }
     authToken = generateAuthToken();
+    authUser = user;
     authExpiry = millis() + AUTH_TOKEN_TTL * 1000UL;
     ble_login_status = "success";
     logLogin(user, authRole);
@@ -1408,33 +1739,119 @@ void setup() {
   });
 
   server.on("/wifi-setup", HTTP_GET, [](AsyncWebServerRequest *request){
-    String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head>"
-                  "<body style='font-family: sans-serif; padding: 20px;'>"
-                  "<h2>Wi-Fi Setup</h2>"
-                  "<form action='/wifi-save' method='POST'>"
-                  "<label>SSID:</label><br><input type='text' name='ssid' value='" + wifi_ssid + "' style='width:100%; max-width:300px;'><br><br>"
-                  "<label>Password:</label><br><input type='password' name='pass' style='width:100%; max-width:300px;'><br><br>"
-                  "<input type='submit' value='Save & Reconnect' style='padding: 10px 20px;'></form>"
-                  "</body></html>";
+    String html = R"HTML(<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Trainer Wi-Fi Setup</title>
+<style>body{font-family:sans-serif;padding:20px;max-width:420px;margin:auto}
+input,select,button{width:100%;padding:12px;margin:6px 0 14px;font-size:16px;box-sizing:border-box}
+button{background:#2563eb;color:#fff;border:0;border-radius:8px}
+button.alt{background:#64748b}#msg{font-weight:bold;min-height:1.4em}</style></head><body>
+<h2>Wi-Fi Setup</h2>
+<label>Nearby networks</label><select id='nets'><option value=''>Scanning...</option></select>
+<button type='button' class='alt' id='rescan'>Rescan</button>
+<label>Network name (SSID)</label><input id='ssid' value='%SSID%' autocapitalize='none' autocomplete='off'>
+<label>Password</label><input id='pass' type='password' autocomplete='off'>
+<button type='button' id='save'>Save &amp; Connect</button>
+<div id='msg'></div>
+<script>
+const $=id=>document.getElementById(id);
+const say=t=>{$('msg').textContent=t;};
+async function scan(rescan){
+  try{
+    const j=await (await fetch('/wifi-scan'+(rescan?'?rescan=1':''))).json();
+    if(j.scanning){setTimeout(()=>scan(false),1500);return;}
+    const s=$('nets'); s.innerHTML='';
+    const first=document.createElement('option'); first.value=''; first.textContent=j.networks.length?'Choose a network...':'No networks found'; s.appendChild(first);
+    j.networks.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+' ('+n.rssi+' dBm'+(n.secure?'':', open')+')';s.appendChild(o);});
+  }catch(e){setTimeout(()=>scan(false),2000);}
+}
+$('nets').onchange=()=>{if($('nets').value)$('ssid').value=$('nets').value;};
+$('rescan').onclick=()=>{$('nets').innerHTML='<option>Scanning...</option>';scan(true);};
+async function poll(n){
+  try{
+    const j=await (await fetch('/wifi-status')).json();
+    if(j.state==='connected'){say('Connected! Board address: '+j.ip+'. Rejoin your normal Wi-Fi now.');return;}
+    if(j.state==='failed'){say('Could not join that network. Check the name and password and try again.');return;}
+  }catch(e){}
+  if(n<40)setTimeout(()=>poll(n+1),1000); else say('Still working... check the board LED.');
+}
+$('save').onclick=async()=>{
+  say('Connecting...');
+  try{
+    const r=await fetch('/wifi-save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:$('ssid').value,pass:$('pass').value})});
+    if(!r.ok){say(await r.text());return;}
+    poll(0);
+  }catch(e){say('Request failed. Stay connected to the trainer Wi-Fi and try again.');}
+};
+scan(false);
+</script></body></html>)HTML";
+    html.replace("%SSID%", htmlEscape(wifi_ssid));
     request->send(200, "text/html", html);
   });
 
+  server.on("/wifi-scan", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (request->hasParam("rescan")) WiFi.scanDelete();
+    int found = WiFi.scanComplete();
+    if (found == WIFI_SCAN_FAILED) {
+      WiFi.scanNetworks(true);
+      request->send(200, "application/json", "{\"scanning\":true}");
+      return;
+    }
+    if (found == WIFI_SCAN_RUNNING) {
+      request->send(200, "application/json", "{\"scanning\":true}");
+      return;
+    }
+    JsonDocument doc;
+    JsonArray networks = doc["networks"].to<JsonArray>();
+    for (int i = 0; i < found && networks.size() < 20; i++) {
+      String name = WiFi.SSID(i);
+      if (name.length() == 0) continue;
+      bool duplicate = false;
+      for (JsonObject existing : networks) {
+        if (existing["ssid"].as<String>() == name) { duplicate = true; break; }
+      }
+      if (duplicate) continue;
+      JsonObject entry = networks.add<JsonObject>();
+      entry["ssid"] = name;
+      entry["rssi"] = WiFi.RSSI(i);
+      entry["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+    WiFi.scanDelete();
+    String payload;
+    serializeJson(doc, payload);
+    request->send(200, "application/json", payload);
+  });
+
+  server.on("/wifi-status", HTTP_GET, [](AsyncWebServerRequest *request){
+    String payload = "{\"state\":\"" + wifi_setup_state + "\",\"connected\":";
+    payload += (WiFi.status() == WL_CONNECTED) ? "true" : "false";
+    payload += ",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+    request->send(200, "application/json", payload);
+  });
+
+  // While the setup AP is up (joining it needs the AP password) no trainer login is required.
   server.on("/wifi-save", HTTP_POST, [](AsyncWebServerRequest *request){
-    if (!requireTrainerSession(request)) return;
-    if(request->hasParam("ssid", true) && request->hasParam("pass", true)) {
-      JsonDocument doc;
-      doc["ssid"] = request->getParam("ssid", true)->value();
-      doc["pass"] = request->getParam("pass", true)->value();
-      File f = LittleFS.open("/wifi.json", FILE_WRITE); serializeJson(doc, f); f.close();
-      wifi_ssid = doc["ssid"].as<String>();
-      wifi_pass = doc["pass"].as<String>();
-      is_ap_mode = false;
-      WiFi.mode(WIFI_STA);
-      WiFi.disconnect(false, false);
-      delay(150);
-      WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
-      request->send(200, "text/html", "<html><body style='font-family:sans-serif;'><h2>Saved! Reconnecting to Wi-Fi now (no reboot required).</h2></body></html>");
-    } else { request->send(400, "text/plain", "Missing credentials"); }
+    bool setupWindow = is_ap_mode || setup_ap_active;
+    if (!setupWindow && !requireTrainerSession(request)) return;
+    if (!request->hasParam("ssid", true) || !request->hasParam("pass", true)) {
+      request->send(400, "text/plain", "Missing credentials");
+      return;
+    }
+    String ssid = request->getParam("ssid", true)->value();
+    String pass = request->getParam("pass", true)->value();
+    ssid.trim();
+    if (ssid.length() == 0 || ssid.length() > 32) {
+      request->send(400, "text/plain", "Network name must be 1-32 characters");
+      return;
+    }
+    if (pass.length() > 0 && (pass.length() < 8 || pass.length() > 63)) {
+      request->send(400, "text/plain", "Password must be 8-63 characters (leave blank for an open network)");
+      return;
+    }
+    wifi_pending_ssid = ssid;
+    wifi_pending_pass = pass;
+    wifi_setup_state = "connecting";
+    wifi_change_requested = true;
+    request->send(200, "application/json", "{\"status\":\"connecting\"}");
   });
 
   server.on("/student", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1640,7 +2057,7 @@ void setup() {
     if (request->method() == HTTP_OPTIONS) {
       request->send(200);
     } else if (is_ap_mode || setup_ap_active) { 
-      request->redirect("http://" + WiFi.softAPIP().toString() + "/"); 
+      request->redirect("http://" + WiFi.softAPIP().toString() + "/wifi-setup");
     } else { 
       request->send(404, "text/plain", "Not Found"); 
     }
@@ -2089,7 +2506,7 @@ void handle_telemetry() {
     if (fault_stuck_id_txv) { target_low += 25.0f; target_high -= 30.0f; target_sh = 0.5f; }
     if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
-    if (fault_inefficient_comp) { target_low += 25.0f; target_high -= 45.0f; }
+    if (fault_inefficient_comp) { target_low += 30.0f; target_high -= 55.0f; }
     if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
     if (fault_low_id_cfm) { target_low -= 20.0f; target_sh = 2.0f; target_supply -= 12.0f; line_friction_delta -= 6.0f; }
     if (fault_high_id_cfm) { target_low += 15.0f; target_sh += 15.0f; target_supply += 8.0f; line_friction_delta += 5.0f; }
@@ -2125,6 +2542,7 @@ void handle_telemetry() {
 
     if (fault_comp_bypass) sim_od_suction_temp += 35.0f; 
     if (fault_rv_bypass) sim_od_suction_temp += 45.0f; 
+    if (fault_inefficient_comp) sim_od_discharge += 20.0f;
     if (fault_non_condensables) sim_od_liquid_temp -= 12.0f; 
     if (fault_clogged_txv || fault_clogged_piston) sim_od_liquid_temp -= 15.0f; 
     if (fault_low_charge) sim_od_liquid_temp += 9.0f;
@@ -2150,7 +2568,7 @@ void handle_telemetry() {
     if (fault_stuck_od_txv) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_clogged_txv || fault_clogged_piston) { target_low -= 35.0f; target_high -= 15.0f; target_sh = 35.0f; }
     if (fault_comp_bypass) { target_low += 40.0f; target_high -= 75.0f; }
-    if (fault_inefficient_comp) { target_low += 25.0f; target_high -= 45.0f; }
+    if (fault_inefficient_comp) { target_low += 30.0f; target_high -= 55.0f; }
     if (fault_rv_bypass) { target_low += 50.0f; target_high -= 80.0f; target_sh += 15.0f; }
     if (fault_low_id_cfm) { target_high += 55.0f; target_supply += 18.0f; line_friction_delta += 10.0f; }
     if (fault_high_id_cfm) { target_high -= 25.0f; target_supply -= 9.0f; line_friction_delta -= 6.0f; }
@@ -2183,6 +2601,7 @@ void handle_telemetry() {
 
     if (fault_comp_bypass) sim_od_suction_temp += 35.0f; 
     if (fault_rv_bypass) sim_od_suction_temp += 45.0f; 
+    if (fault_inefficient_comp) sim_od_discharge += 20.0f;
     if (fault_non_condensables) sim_od_liquid_temp -= 12.0f; 
     if (fault_clogged_txv || fault_clogged_piston) sim_od_liquid_temp -= 15.0f; 
     if (fault_low_charge) sim_od_liquid_temp += 9.0f;
@@ -2230,7 +2649,7 @@ void handle_telemetry() {
       } else {
           sim_comp_amps = 10.0f + (sim_od_high_press * 0.035f);
           if (fault_comp_bypass) sim_comp_amps -= 6.5f; 
-          if (fault_inefficient_comp) sim_comp_amps -= 4.0f;
+          if (fault_inefficient_comp) sim_comp_amps -= 5.0f;
           sim_comp_amps = add_noise(sim_comp_amps, 0.2f);
       }
   } else {
@@ -2393,43 +2812,54 @@ void handle_simulations() {
 }
 
 void runCommsSlice() {
+  uint32_t now = millis();
   bool wifi_connected = (WiFi.status() == WL_CONNECTED);
   if (wifi_connected && !wifi_was_connected) {
-    wifi_connected_flash_until = millis() + WIFI_CONNECTED_FLASH_MS;
+    wifi_connected_flash_until = now + WIFI_CONNECTED_FLASH_MS;
     wifi_disconnected_since = 0;
+    network_services_needed = true;
   } else if (!wifi_connected && wifi_was_connected && wifi_disconnected_since == 0) {
-    wifi_disconnected_since = millis();
+    wifi_disconnected_since = now;
   }
   wifi_was_connected = wifi_connected;
 
   if (is_ap_mode || setup_ap_active) { dnsServer.processNextRequest(); }
-  else if (wifi_ssid.length() > 0 && WiFi.status() != WL_CONNECTED) {
-    uint32_t now = millis();
-    if (wifi_disconnected_since == 0) {
-      wifi_disconnected_since = now;
-    }
+  handleWifiChangeRequest(now);
 
-    if ((now - wifi_disconnected_since) >= WIFI_AP_FAILOVER_MS) {
-      Serial.println("WiFi reconnect timeout. Switching to AP mode.");
-      is_ap_mode = true;
-      WiFi.mode(WIFI_AP);
-      setup_ap_active = WiFi.softAP("Vexera Core Trainer", "8037945526");
-      dnsServer.start(53, "*", WiFi.softAPIP());
-      wifi_reconnect_timer = now;
-      wifi_disconnected_since = now;
-      return;
-    }
-
-    if (now - wifi_reconnect_timer >= 10000) {
-      wifi_reconnect_timer = now;
-      Serial.println("WiFi disconnected. Attempting reconnect...");
-      WiFi.reconnect();
-      if (WiFi.status() != WL_CONNECTED) {
-        WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  if (wifi_connected) {
+    is_ap_mode = false;
+    if (setup_ap_active) {
+      if (ap_stop_at == 0) {
+        ap_stop_at = now + AP_GRACE_AFTER_CONNECT_MS;
+        if (ap_stop_at == 0) ap_stop_at = 1;
+      } else if (static_cast<int32_t>(now - ap_stop_at) >= 0) {
+        stopApMode();
       }
     }
-  }
-  ArduinoOTA.handle();
+    if (network_services_needed || (!mqtt_configured && (now - services_last_try) >= 30000)) {
+      startNetworkServices();
+    }
+  } else if (wifi_ssid.length() > 0 && !wifi_attempt_active) {
+    ap_stop_at = 0;
+    if (wifi_disconnected_since == 0) wifi_disconnected_since = now;
+    bool ap_up = is_ap_mode || setup_ap_active;
+    if (ap_up) is_ap_mode = true;
+
+    if (!ap_up && (now - wifi_disconnected_since) >= WIFI_AP_FAILOVER_MS) {
+      Serial.println("WiFi reconnect timeout. Switching to AP mode.");
+      startApMode();
+      wifi_disconnected_since = now;
+    } else {
+      // Do not interrupt someone who is configuring the board over the AP.
+      bool clientOnAp = ap_up && WiFi.softAPgetStationNum() > 0;
+      uint32_t interval = ap_up ? AP_RETRY_INTERVAL_MS : 10000;
+      if (!clientOnAp && (now - wifi_reconnect_timer) >= interval) {
+        wifi_reconnect_timer = now;
+        Serial.println("WiFi disconnected. Attempting reconnect...");
+        retryWifiConnection();
+      }
+    }
+  }  ArduinoOTA.handle();
   ws.cleanupClients(); 
   
   if (pending_reboot && millis() > reboot_timer) {

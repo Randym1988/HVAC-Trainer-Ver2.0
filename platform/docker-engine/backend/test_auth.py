@@ -302,6 +302,72 @@ class SessionAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(main.get_session_role(request))
 
 
+
+class UserManagementApiTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        main.sessions.clear()
+        main.users_db.clear()
+        main.users_db.update(
+            {
+                "boss": {"pw_hash": main.hash_password("boss-password"), "role": "instructor"},
+                "pupil": {"pw_hash": main.hash_password("pupil-password"), "role": "student"},
+            }
+        )
+        self.save = patch.object(main, "save_users_db")
+        self.save.start()
+        self.addCleanup(self.save.stop)
+
+    async def session(self, username, password):
+        login = await main.login(make_request(), Response(), username, password)
+        return make_request([(b"authorization", f"Bearer {login['token']}".encode())])
+
+    async def test_list_exposes_fingerprint_but_never_the_full_hash(self):
+        request = await self.session("boss", "boss-password")
+        payload = await main.list_users(request)
+        self.assertEqual([u["user"] for u in payload["users"]], ["boss", "pupil"])
+        self.assertTrue(payload["users"][0]["hash_scheme"].startswith("pbkdf2_sha256/"))
+        self.assertNotIn(main.users_db["boss"]["pw_hash"], json.dumps(payload))
+
+    async def test_students_cannot_manage_users(self):
+        request = await self.session("pupil", "pupil-password")
+        with self.assertRaises(HTTPException):
+            await main.list_users(request)
+        with self.assertRaises(HTTPException):
+            await main.delete_user_account(request, "boss")
+
+    async def test_reset_password_changes_hash_and_revokes_sessions(self):
+        request = await self.session("boss", "boss-password")
+        await self.session("pupil", "pupil-password")
+        await main.reset_user_password(request, "pupil", "brand-new-pass")
+        self.assertTrue(main.verify_password("brand-new-pass", main.users_db["pupil"]))
+        self.assertFalse(main.verify_password("pupil-password", main.users_db["pupil"]))
+        self.assertFalse(any(s["username"] == "pupil" for s in main.sessions.values()))
+
+    async def test_delete_removes_user_but_not_self_or_last_admin(self):
+        request = await self.session("boss", "boss-password")
+        await main.delete_user_account(request, "pupil")
+        self.assertNotIn("pupil", main.users_db)
+        with self.assertRaises(HTTPException) as own:
+            await main.delete_user_account(request, "boss")
+        self.assertEqual(own.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as missing:
+            await main.delete_user_account(request, "nobody")
+        self.assertEqual(missing.exception.status_code, 404)
+
+    def test_cli_listing_and_export_include_hashes_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            users_path = Path(directory) / "users.json"
+            export_path = Path(directory) / "backup.json"
+            users_path.write_text(json.dumps(main.users_db), encoding="utf-8")
+            with patch.object(main, "USERS_DB_FILE", str(users_path)):
+                plain = "\n".join(manage_users.list_users())
+                full = "\n".join(manage_users.list_users(show_hashes=True))
+                self.assertEqual(manage_users.export_users(str(export_path)), 2)
+            self.assertNotIn(main.users_db["boss"]["pw_hash"], plain)
+            self.assertIn(main.users_db["boss"]["pw_hash"], full)
+            exported = json.loads(export_path.read_text(encoding="utf-8"))
+            self.assertEqual(exported["pupil"]["pw_hash"], main.users_db["pupil"]["pw_hash"])
+
 class TrainerStudentDataSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_trainer_heartbeat_does_not_save_edges_to_disk(self):
         original_state = main.state

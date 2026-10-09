@@ -120,3 +120,33 @@ The script stores secrets locally in the ignored `platform/docker-engine/.env` a
 The firmware stores optional MQTT credentials in NVS. After flashing the credential-capable firmware, log in to each trainer as an instructor and provision its matching account with `POST /api/mqtt/credentials` using form fields `username` and `password`. The username must match the assigned trainer ID (for example, `trainer01`), and the password must be 20-128 characters. Use the matching `MQTT_TRAINERxx_PASSWORD` value from the local `.env` without pasting it into chat.
 
 The trainer provisioning endpoint currently uses HTTP. Provision only on a trusted local network until TLS is configured for trainer web access. Do not bring a trainer back online against the authenticated broker until its matching credentials have been provisioned.
+
+## User Accounts
+
+Trainer boards and the engine store passwords only as salted PBKDF2-SHA256 hashes (`pbkdf2_sha256$rounds$salt$digest`), so a forgotten password cannot be read back; it is reset instead. Existing plaintext records on a board are hashed automatically at boot.
+
+Use `tools\manage-trainer-users.ps1` (instructor login required, prompted per target):
+
+- `-Action List` shows usernames, roles and hash fingerprints for `-Target Engine|Furnace|HeatPump|All`.
+- `-Action Export` writes every account and its full hash to `tools\user-registry.json` (git-ignored; keep private).
+- `-Action ResetPassword -Target <t> -User <name>` sets a new password.
+- `-Action Delete -Target <t> -User <name>` removes an account. You cannot delete yourself or the last administrator.
+
+Board endpoints: `GET /api/users` (add `?hashes=1` for full hashes), `POST /api/users/delete`, `POST /api/users/reset-password`. The engine has the same routes, an account list in the instructor portal, and `manage_users.py list-users|export-users` for host-side access.
+
+## Server Auto-Discovery
+
+The Docker engine answers UDP broadcasts on port 4210. A packet containing `DISCOVER_HVAC_TRAINER` gets a JSON reply (`service`, `version`, `http_port`, `mqtt_port`, `hostname`). The mobile app broadcasts this at launch for 3 seconds: one reply connects automatically, several show a selection dialog, none shows a manual-address dialog with Retry Discovery. Set `DISCOVERY_HOSTNAME` in the engine environment to change the advertised name. On a Linux Docker host, published ports may not receive LAN broadcasts; use `network_mode: host` for the engine there.
+
+
+## Wi-Fi Recovery (AP Mode)
+
+If the saved Wi-Fi is not found at boot (after also trying the built-in default), or is lost for 60 seconds while running, the board starts the setup AP `Vexera Core Trainer` (LED purple) and keeps retrying the saved network every 60 seconds. Retries pause while a phone is connected to the AP.
+
+1. Join the AP. The captive portal opens the setup page; otherwise browse to `http://192.168.4.1/wifi-setup`.
+2. Pick the network from the scan list (or type it), enter the password, and tap Save & Connect. No trainer login is needed while the AP is up.
+3. The network is saved only after the board joins it. A wrong password reports failure and the previous saved network is kept.
+4. After joining, the AP stays up about 30 seconds so the page can show the result, then stops. Engine discovery, MQTT, mDNS and NTP restart automatically; no reboot is needed.
+
+Outside AP mode, `/wifi-save` still requires an instructor session.
+

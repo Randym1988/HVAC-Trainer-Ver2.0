@@ -2,6 +2,7 @@ FROM nginx:alpine
 
 # Copy reorganized frontend files
 COPY web/instructor/index.html /usr/share/nginx/html/index.html
+COPY web/instructor/accounts.html /usr/share/nginx/html/accounts.html
 COPY web/student/student.html /usr/share/nginx/html/student.html
 COPY web/assets/ /usr/share/nginx/html/assets/
 

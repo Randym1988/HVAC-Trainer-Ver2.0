@@ -40,6 +40,7 @@
       window.capacitorExports = capacitorExports;
     </script>
     <script src="bluetooth-le.js"></script>
+    <script src="auto-discovery.js"></script>
     <style>
       :root {
         --bg-base: #09090b;
@@ -1475,6 +1476,25 @@
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         return `${wsProtocol}://${targetHost}/ws`;
       }
+
+      // Auto-discovery picked (or the user typed) a server: switch the API and telemetry socket to it.
+      window.addEventListener("vexera:server-selected", (event) => {
+        const host = normalizeEngineHost(
+          `${event.detail.ip}:${event.detail.http_port}`,
+        );
+        if (!host) return;
+        const changed = host !== activeHost;
+        activeHost = host;
+        localStorage.setItem("vexera_engine_host", host);
+        const hostInput = document.getElementById("engine_host");
+        if (hostInput) hostInput.value = host;
+        if (changed && ws) {
+          const previous = ws;
+          ws = null;
+          previous.close();
+        }
+        initWS();
+      });
 
       function sendCommand(topic, value) {
         if (ws && ws.readyState === WebSocket.OPEN) {

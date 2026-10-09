@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from typing import Any
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from aiomqtt import Client as MQTTClient, MqttError
+from discovery_service import DiscoveryService
 
 app = FastAPI()
 
@@ -63,6 +64,7 @@ EDGE_TIMEOUT_SECONDS = float(os.getenv("EDGE_TIMEOUT_SECONDS", "8.0"))
 MDNS_SERVICE_NAME = os.getenv("ENGINE_MDNS_NAME", "trainer-engine")
 mdns = None
 mdns_service_info = None
+discovery_service = DiscoveryService()
 USERS_DB_FILE = os.getenv("USERS_DB_FILE", "users.json")
 users_db: dict[str, dict[str, str]] = {}
 PBKDF2_ROUNDS = int(os.getenv("USER_PASSWORD_ROUNDS", "150000"))
@@ -187,6 +189,56 @@ def get_session_role(request: Request) -> str | None:
 def require_instructor_or_admin(request: Request) -> None:
     if get_session_role(request) not in {"admin", "instructor"}:
         raise HTTPException(status_code=401, detail="DENIED")
+
+
+ADMIN_ROLES = {"admin", "instructor"}
+
+
+def get_session_username(request: Request) -> str | None:
+    if get_session_role(request) is None:
+        return None
+    authorization = request.headers.get("authorization", "")
+    token = (
+        authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    )
+    token = token or request.cookies.get(SESSION_COOKIE_NAME, "")
+    return sessions[token].get("username")
+
+
+def describe_user_record(username: str, record: dict[str, str]) -> dict[str, Any]:
+    """Summarize an account without exposing the full password hash."""
+    encoded = str(record.get("pw_hash", ""))
+    parts = encoded.split("$")
+    summary: dict[str, Any] = {
+        "user": username,
+        "role": str(record.get("role", "student")),
+        "hash_scheme": "plaintext (rotate required)" if "pw" in record else "none",
+        "hash_fingerprint": None,
+    }
+    if len(parts) == 4 and parts[0] == "pbkdf2_sha256":
+        summary["hash_scheme"] = f"{parts[0]}/{parts[1]}"
+        summary["hash_fingerprint"] = parts[3][:12]
+    return summary
+
+
+def ensure_user_removable(users: dict[str, dict[str, str]], username: str) -> None:
+    record = users.get(username)
+    if not isinstance(record, dict):
+        raise ValueError(f"User {username!r} does not exist")
+    if record.get("role") in ADMIN_ROLES:
+        remaining_admins = sum(
+            item.get("role") in ADMIN_ROLES
+            for other_name, item in users.items()
+            if other_name != username and isinstance(item, dict)
+        )
+        if remaining_admins == 0:
+            raise ValueError("Cannot remove the last administrator")
+
+
+def revoke_user_sessions(username: str) -> None:
+    for token, session in list(sessions.items()):
+        if session.get("username") == username:
+            sessions.pop(token, None)
 
 
 def format_trainer_label_from_edge_id(edge_id: str) -> str:
@@ -927,8 +979,8 @@ async def simulation_loop():
                 target_low += 40.0 * ref_mult
                 target_high -= 75.0 * ref_mult
             if fault_inefficient_comp:
-                target_low += 25.0 * ref_mult
-                target_high -= 45.0 * ref_mult
+                target_low += 30.0 * ref_mult
+                target_high -= 55.0 * ref_mult
             if fault_rv_bypass:
                 target_low += 50.0 * ref_mult
                 target_high -= 80.0 * ref_mult
@@ -998,6 +1050,8 @@ async def simulation_loop():
                 state.sim_od_suction_temp += 35.0
             if fault_rv_bypass:
                 state.sim_od_suction_temp += 45.0
+            if fault_inefficient_comp:
+                state.sim_od_discharge += 20.0
             if fault_non_condensables:
                 state.sim_od_liquid_temp -= 12.0
             if fault_clogged_txv or fault_clogged_piston:
@@ -1053,8 +1107,8 @@ async def simulation_loop():
                 target_low += 40.0 * ref_mult
                 target_high -= 75.0 * ref_mult
             if fault_inefficient_comp:
-                target_low += 25.0 * ref_mult
-                target_high -= 45.0 * ref_mult
+                target_low += 30.0 * ref_mult
+                target_high -= 55.0 * ref_mult
             if fault_rv_bypass:
                 target_low += 50.0 * ref_mult
                 target_high -= 80.0 * ref_mult
@@ -1110,6 +1164,8 @@ async def simulation_loop():
                 state.sim_od_suction_temp += 35.0
             if fault_rv_bypass:
                 state.sim_od_suction_temp += 45.0
+            if fault_inefficient_comp:
+                state.sim_od_discharge += 20.0
             if fault_non_condensables:
                 state.sim_od_liquid_temp -= 12.0
             if fault_clogged_txv or fault_clogged_piston:
@@ -1209,7 +1265,7 @@ async def simulation_loop():
                 if fault_comp_bypass:
                     amps -= 6.5
                 if fault_inefficient_comp:
-                    amps -= 4.0
+                    amps -= 5.0
                 state.sim_comp_amps = add_noise(amps, 0.2)
         else:
             state.sim_comp_amps = 0.0
@@ -1391,6 +1447,8 @@ async def startup_event():
         sync_selected_edge_into_state()
     with suppress(Exception):
         await asyncio.to_thread(start_mdns_advertisement)
+    with suppress(Exception):
+        discovery_service.start()
     simulation_task = asyncio.create_task(simulation_loop())
     mqtt_task = asyncio.create_task(mqtt_command_listener())
 
@@ -1414,6 +1472,8 @@ async def shutdown_event():
     mqtt_task = None
     mqtt_client = None
     stop_mdns_advertisement()
+    with suppress(Exception):
+        await asyncio.to_thread(discovery_service.stop)
 
 
 # -------------------------------------------------
@@ -2208,6 +2268,58 @@ async def add_user(
         "user": username,
         "role": normalized_role,
     }
+
+
+@app.get("/api/users")
+async def list_users(request: Request):
+    require_instructor_or_admin(request)
+    return {
+        "users": [
+            describe_user_record(name, record)
+            for name, record in sorted(users_db.items(), key=lambda item: item[0].lower())
+            if isinstance(record, dict)
+        ]
+    }
+
+
+@app.post("/api/users/delete")
+async def delete_user_account(request: Request, user: str = Form(...)):
+    require_instructor_or_admin(request)
+    username = (user or "").strip()
+    if username == get_session_username(request):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    try:
+        ensure_user_removable(users_db, username)
+    except ValueError as error:
+        status = 404 if "does not exist" in str(error) else 400
+        raise HTTPException(status_code=status, detail=str(error)) from error
+
+    del users_db[username]
+    save_users_db()
+    revoke_user_sessions(username)
+    return {"message": "OK", "user": username}
+
+
+@app.post("/api/users/reset-password")
+async def reset_user_password(
+    request: Request,
+    user: str = Form(...),
+    passw: str = Form(..., alias="pass"),
+):
+    require_instructor_or_admin(request)
+    username = (user or "").strip()
+    password = (passw or "").strip()
+    record = users_db.get(username)
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=404, detail="User does not exist")
+    if len(password) < 3 or len(password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be 3-128 characters")
+
+    record.pop("pw", None)
+    record["pw_hash"] = hash_password(password)
+    save_users_db()
+    revoke_user_sessions(username)
+    return {"message": "OK", "user": username}
 
 
 @app.post("/api/login")

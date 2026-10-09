@@ -488,8 +488,9 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	// Open internal bypass leaks discharge gas back to the suction side.
 	if (has_faults && faults[44]) compressor_capacity_factor = 0.5f;
 	if (has_faults && faults[45]) {
-		compressor_capacity_factor = 0.85f;
-		compressor_efficiency_factor = 0.75f;
+		// Worn valves re-compress leaked gas: weak pumping, low amps, hot discharge.
+		compressor_capacity_factor = 0.7f;
+		compressor_efficiency_factor = 0.9f;
 	}
 
 	float sensible_load_btu_per_hour = 0.0f;
@@ -592,8 +593,9 @@ void PhysicsEngine::update(bool y_call, bool w_call, bool g_call,
 	const float target_liquid_temp = compressor_running
 		? max(current_cond_temp_f - current_subcool, set_od_temp + 3.0f)
 		: current_cond_temp_f;
+	const float worn_valve_discharge_f = (has_faults && faults[45]) ? 20.0f : 0.0f;
 	const float target_discharge_temp = compressor_running
-		? current_cond_temp_f + 35.0f + 0.15f *
+		? current_cond_temp_f + 35.0f + worn_valve_discharge_f + 0.15f *
 			max(current_cond_temp_f - current_evap_temp_f, 0.0f)
 		: current_cond_temp_f + 8.0f;
 

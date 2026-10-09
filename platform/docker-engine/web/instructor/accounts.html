@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Existing Accounts</title>
+    <style>
+      :root {
+        --bg-base: #0a0e17;
+        --bg-panel-top: #1e293b;
+        --bg-panel-bottom: #0f172a;
+        --text-main: #f8fafc;
+        --text-muted: #94a3b8;
+        --accent-blue: #3b82f6;
+        --accent-green: #10b981;
+        --accent-red: #ef4444;
+        --border-highlight: rgba(255, 255, 255, 0.12);
+        --border-shadow: rgba(0, 0, 0, 0.6);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg-base);
+        color: var(--text-main);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: flex;
+        justify-content: center;
+        padding: 24px 16px;
+      }
+      .panel {
+        width: 100%;
+        max-width: 560px;
+        background: linear-gradient(
+          180deg,
+          var(--bg-panel-top),
+          var(--bg-panel-bottom)
+        );
+        border: 1px solid var(--border-shadow);
+        border-top: 1px solid var(--border-highlight);
+        border-radius: 14px;
+        padding: 22px;
+        align-self: flex-start;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: var(--accent-blue);
+      }
+      p.note {
+        margin: 0 0 16px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--text-muted);
+      }
+      label {
+        display: block;
+        margin: 12px 0 6px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }
+      input {
+        width: 100%;
+        padding: 13px;
+        border-radius: 10px;
+        border: 1px solid #000;
+        background: #030712;
+        color: white;
+        font-size: 14px;
+        outline: none;
+      }
+      button {
+        padding: 11px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--border-shadow);
+        border-top: 1px solid var(--border-highlight);
+        background: #1e293b;
+        color: var(--text-main);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        cursor: pointer;
+      }
+      button.primary {
+        width: 100%;
+        margin-top: 16px;
+        padding: 14px;
+        background: var(--accent-blue);
+        border: none;
+      }
+      button.danger {
+        color: var(--accent-red);
+      }
+      .error {
+        min-height: 18px;
+        margin-top: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--accent-red);
+      }
+      .bar {
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #1e293b;
+      }
+      .row .who {
+        flex: 1;
+        min-width: 0;
+        word-break: break-all;
+      }
+      .row .meta {
+        display: block;
+        margin-top: 2px;
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <section id="login-view">
+        <h1>Instructor Sign-In</h1>
+        <p class="note">
+          The account list is restricted. Sign in with an instructor or admin
+          account to continue.
+        </p>
+        <form id="login-form" method="post" action="/api/login">
+          <label for="login_user">Username</label>
+          <input
+            id="login_user"
+            name="username"
+            type="text"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
+          <label for="login_pass">Password</label>
+          <input
+            id="login_pass"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <div id="login_error" class="error"></div>
+          <button class="primary" type="submit">UNLOCK</button>
+        </form>
+        <p class="note" style="margin-top: 14px">
+          <a href="/instructor" style="color: var(--accent-blue)"
+            >&larr; Back to portal</a
+          >
+        </p>
+      </section>
+
+      <section id="accounts-view" hidden>
+        <h1>Existing Accounts</h1>
+        <p class="note">
+          Passwords are stored as salted hashes and cannot be read back. If one
+          is forgotten, use Reset to set a new one.
+        </p>
+        <div class="bar">
+          <a href="/instructor" style="color: var(--accent-blue); font-size: 12px"
+            >&larr; Back to portal</a
+          >
+          <span>
+            <button id="refresh-btn" type="button">REFRESH</button>
+            <button id="lock-btn" type="button">LOCK</button>
+          </span>
+        </div>
+        <div id="status" class="error"></div>
+        <div id="user_list" style="font-size: 13px; color: var(--text-muted)">
+          Loading…
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const ALLOWED_ROLES = ["instructor", "admin"];
+      const loginView = document.getElementById("login-view");
+      const accountsView = document.getElementById("accounts-view");
+      const loginError = document.getElementById("login_error");
+      const statusBox = document.getElementById("status");
+      const listBox = document.getElementById("user_list");
+
+      const formHeaders = {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      };
+
+      function showLogin() {
+        accountsView.hidden = true;
+        loginView.hidden = false;
+        document.getElementById("login_pass").value = "";
+        listBox.textContent = "";
+      }
+
+      async function lock() {
+        await fetch("/api/logout", {
+          method: "POST",
+          credentials: "include",
+        }).catch(() => {});
+        showLogin();
+      }
+
+      async function signIn(event) {
+        event.preventDefault();
+        loginError.textContent = "";
+        const user = document.getElementById("login_user").value.trim();
+        const pass = document.getElementById("login_pass").value;
+        try {
+          const res = await fetch("/api/login", {
+            method: "POST",
+            credentials: "include",
+            headers: formHeaders,
+            body: new URLSearchParams({ user, pass }),
+          });
+          if (!res.ok) {
+            loginError.textContent = "Invalid credentials.";
+            return;
+          }
+          const { role } = await res.json();
+          if (window.PasswordCredential && navigator.credentials && ALLOWED_ROLES.includes(role)) {
+            navigator.credentials
+              .store(new PasswordCredential({ id: user, password: pass, name: user }))
+              .catch(() => {});
+          }
+          if (!ALLOWED_ROLES.includes(role)) {
+            await lock();
+            loginError.textContent = "Instructor or admin access required.";
+            return;
+          }
+          loginView.hidden = true;
+          accountsView.hidden = false;
+          document.getElementById("login_pass").value = "";
+          loadUserList();
+        } catch {
+          loginError.textContent = "Unable to reach the server.";
+        }
+      }
+
+      async function postAction(path, fields) {
+        const res = await fetch(path, {
+          method: "POST",
+          credentials: "include",
+          headers: formHeaders,
+          body: new URLSearchParams(fields),
+        });
+        if (res.status === 401) {
+          showLogin();
+          loginError.textContent = "Session expired. Sign in again.";
+          return false;
+        }
+        if (!res.ok) {
+          let msg = "";
+          try {
+            msg = (await res.json())?.detail || "";
+          } catch {}
+          statusBox.textContent = msg || "Request failed.";
+        }
+        return res.ok;
+      }
+
+      async function loadUserList() {
+        statusBox.textContent = "";
+        try {
+          const res = await fetch("/api/users", { credentials: "include" });
+          if (res.status === 401) {
+            showLogin();
+            loginError.textContent = "Session expired. Sign in again.";
+            return;
+          }
+          if (!res.ok) throw new Error("bad status");
+          const { users } = await res.json();
+          listBox.textContent = "";
+          users.forEach((u) => {
+            const row = document.createElement("div");
+            row.className = "row";
+
+            const who = document.createElement("div");
+            who.className = "who";
+            who.textContent = u.user;
+            const meta = document.createElement("span");
+            meta.className = "meta";
+            meta.textContent = u.role;
+            who.appendChild(meta);
+
+            const reset = document.createElement("button");
+            reset.type = "button";
+            reset.textContent = "RESET";
+            reset.onclick = () => resetPassword(u.user);
+
+            const del = document.createElement("button");
+            del.type = "button";
+            del.className = "danger";
+            del.textContent = "DELETE";
+            del.onclick = () => deleteAccount(u.user);
+
+            row.append(who, reset, del);
+            listBox.appendChild(row);
+          });
+          if (!users.length) listBox.textContent = "No accounts.";
+        } catch {
+          listBox.textContent = "Unable to load accounts.";
+        }
+      }
+
+      async function resetPassword(user) {
+        const pass = prompt(`New password for ${user}:`);
+        if (!pass) return;
+        if (await postAction("/api/users/reset-password", { user, pass })) {
+          statusBox.style.color = "var(--accent-green)";
+          statusBox.textContent = `Password for ${user} was reset.`;
+          loadUserList();
+        }
+      }
+
+      async function deleteAccount(user) {
+        if (!confirm(`Delete account "${user}"? This cannot be undone.`)) return;
+        statusBox.style.color = "";
+        if (await postAction("/api/users/delete", { user })) loadUserList();
+      }
+
+      document.getElementById("login-form").addEventListener("submit", signIn);
+      document.getElementById("refresh-btn").onclick = loadUserList;
+      document.getElementById("lock-btn").onclick = lock;
+    </script>
+  </body>
+</html>

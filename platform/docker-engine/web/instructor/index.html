@@ -1058,9 +1058,19 @@
           AUTHENTICATION REQUIRED
         </p>
 
+        <form
+          id="login-form"
+          method="post"
+          action="/api/login"
+          onsubmit="attemptLogin('admin'); return false;"
+        >
         <input
           type="text"
           id="login_user"
+          name="username"
+          autocomplete="username"
+          autocapitalize="none"
+          spellcheck="false"
           placeholder="Username"
           style="
             width: 100%;
@@ -1075,16 +1085,14 @@
             font-family: inherit;
             box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8);
           "
-          onkeypress="
-            if (event.key === 'Enter')
-              document.getElementById('login_pass').focus();
-          "
         />
 
         <div style="position: relative; width: 100%; margin-bottom: 25px">
           <input
             type="password"
             id="login_pass"
+            name="password"
+            autocomplete="current-password"
             placeholder="Password"
             style="
               width: 100%;
@@ -1099,7 +1107,6 @@
               font-family: inherit;
               box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8);
             "
-            onkeypress="if (event.key === 'Enter') attemptLogin('admin');"
           />
           <span
             onclick="togglePassword()"
@@ -1149,6 +1156,7 @@
         </div>
 
         <button
+          type="submit"
           style="
             width: 100%;
             background: linear-gradient(
@@ -1167,11 +1175,12 @@
             cursor: pointer;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
           "
-          onclick="attemptLogin('admin')"
         >
           AUTHORIZE ACCESS
         </button>
+        </form>
         <button
+          type="button"
           style="
             width: 100%;
             background: transparent;
@@ -3515,6 +3524,7 @@
                   padding: 16px;
                   letter-spacing: 1px;
                 "
+                data-type="action"
                 onclick="createUser('student')"
               >
                 CREATE STUDENT
@@ -3530,6 +3540,7 @@
                   padding: 16px;
                   letter-spacing: 1px;
                 "
+                data-type="action"
                 onclick="createUser('instructor')"
               >
                 CREATE INSTRUCTOR
@@ -3554,6 +3565,20 @@
             >
               ✅ Profile Encoded to Database
             </div>
+
+            <a
+              class="btn"
+              data-type="action"
+              href="/accounts.html"
+              style="
+                justify-content: center;
+                text-decoration: none;
+                margin-top: 10px;
+                padding: 14px;
+                letter-spacing: 1px;
+              "
+              >VIEW EXISTING ACCOUNTS</a
+            >
           </div>
         </div>
       </div>
@@ -4590,6 +4615,8 @@
           let text = btn.textContent.trim();
           if (btn.getAttribute("data-type") === "indicator") {
             btn.innerHTML = `<div class="btn-left">${iconHtml}<span class="btn-label">${text}</span></div><div class="indicator-light"></div>`;
+          } else if (btn.getAttribute("data-type") === "action") {
+            btn.innerHTML = `<div class="btn-left">${iconHtml}<span class="btn-label">${text}</span></div>`;
           } else {
             btn.innerHTML = `<div class="btn-left">${iconHtml}<span class="btn-label">${text}</span></div><div class="toggle-switch"><div class="toggle-knob"></div></div>`;
           }
@@ -5148,6 +5175,11 @@
             console.log("[attemptLogin] Server response status:", res.status);
             if (res.ok) {
               console.log("[attemptLogin] Login successful");
+              if (window.PasswordCredential && navigator.credentials) {
+                navigator.credentials
+                  .store(new PasswordCredential({ id: u, password: p, name: u }))
+                  .catch(() => {});
+              }
               document.body.classList.remove("login-mode");
               sessionStorage.removeItem(BYPASS_LOGIN_KEY);
               document.getElementById("login_error").style.display = "none";

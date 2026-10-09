@@ -3,7 +3,9 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+      - "4210:4210/udp"
     environment:
+      - DISCOVERY_HOSTNAME=${DISCOVERY_HOSTNAME:-trainer-engine}
       - EDGE_REQUIRED=true
       - MQTT_HOST=mqtt
       - MQTT_USERNAME=${MQTT_ENGINE_USERNAME:?Run tools/setup-mqtt-auth.ps1 first}
