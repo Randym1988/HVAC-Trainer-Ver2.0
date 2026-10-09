@@ -142,20 +142,21 @@ The Docker engine answers UDP broadcasts on port 4210. A packet containing `DISC
 ## Compressor Maps by Refrigerant
 
 - **R-454B:** Copeland YA31K1E-PFV (3-ton, 208/230-1-60), performance chart 99949-230 (20 F superheat, 15 F subcooling, 95 F air over, current @ 230 V, nominal +/-5%). Selecting R-454B in the instructor portal switches both the furnace and heat-pump trainers (and the engine simulation) to this map. The furnace physics uses capacity, power, amps and mass flow; the heat pump uses amps from saturated suction/discharge (dew) temperatures.
+- **R-32:** Copeland YP31K1T-PFV (3-ton, 208/230-1-60), performance chart 118323-230 (20 F superheat, 15 F subcooling, 95 F air over, current @ 230 V, nominal +/-5%). Used the same way as the R-454B map on both trainers and in the engine. The chart has no points between 10 F and 40 F evaporating, so values there are interpolated across the gap.
 - **R-410A:** Copeland ZP29K6E-PFV chart 511570-230 on the furnace trainer; the heat-pump trainer keeps its legacy amp formula.
 - **Other refrigerants:** scaled R-410A map (furnace) / legacy formula (heat pump).
-- Faults 44 (internal bypass) and 45 (inefficient compressor) scale chart amps by 0.5 and 0.7/0.9 on R-454B. Inputs outside the published envelope clamp to the chart edge. Startup/locked-rotor current stays at the existing 143 A (not on the chart).
-- The table lives in `firmware/src/PhysicsEngine.cpp` (`kYa31CompressorMap`) and `platform/docker-engine/backend/compressor_maps.py`; `test_compressor_maps.py` fails if they drift.
+- Faults 44 (internal bypass) and 45 (inefficient compressor) scale chart amps by 0.5 and 0.7/0.9 on R-454B and R-32. Inputs outside the published envelope clamp to the chart edge. Startup/locked-rotor current stays at the existing 143 A (not on the chart).
+- The tables live in `firmware/src/PhysicsEngine.cpp` (`kYa31CompressorMap`, `kYp31CompressorMap`) and `platform/docker-engine/backend/compressor_maps.py`; `test_compressor_maps.py` fails if they drift.
 
-Copeland electrical component data (the selected refrigerant picks the compressor; R-454B = YA31K1E, all others = ZP29K6E):
+Copeland electrical component data (the selected refrigerant picks the compressor; R-454B = YA31K1E, R-32 = YP31K1T, all others = ZP29K6E):
 
-| | YA31K1E-PFV (R-454B) | ZP29K6E-PFV (R-410A) |
-|---|---|---|
-| Stator | 546-5143-10 / 846-5143-10 | 546-5016-46 / 846-5016-46 (alt 546-5133-03) |
-| Winding resistance (start / run, ohms +/-7%) | 1.43 / 0.72 | 1.58 / 0.92 |
-| Potential relay | 040-0166-37 | 040-0166-37 |
-| Start capacitor | 88-106 uF, 330 V (014-0061-27) | 88-106 uF, 330 V (014-0061-27) |
-| Run capacitor | 40 uF, 370 V (014-0064-08) | 45 uF, 370 V (014-0064-25) |
+| | YA31K1E-PFV (R-454B) | YP31K1T-PFV (R-32) | ZP29K6E-PFV (R-410A) |
+|---|---|---|---|
+| Stator | 546-5143-10 / 846-5143-10 | 546-5143-22 / 846-5143-22 | 546-5016-46 / 846-5016-46 (alt 546-5133-03) |
+| Winding resistance (start / run, ohms +/-7%) | 1.43 / 0.72 | 1.43 / 0.72 | 1.58 / 0.92 |
+| Potential relay | 040-0166-37 | 040-0166-37 | 040-0166-37 |
+| Start capacitor | 88-106 uF, 330 V (014-0061-27) | 88-106 uF, 330 V (014-0061-27) | 88-106 uF, 330 V (014-0061-27) |
+| Run capacitor | 40 uF, 370 V (014-0064-08) | 40 uF, 370 V (014-0064-08) | 45 uF, 370 V (014-0064-25) |
 
 Neither Copeland sheet lists RLA/LRA; take those from the unit nameplate.
 

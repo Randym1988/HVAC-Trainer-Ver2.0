@@ -1,6 +1,7 @@
 """Published compressor performance maps shared with the trainer firmware.
 
-The YA31K1E-PFV table must stay identical to ``kYa31CompressorMap`` in
+The YA31K1E-PFV (R-454B) and YP31K1T-PFV (R-32) tables must stay identical to
+``kYa31CompressorMap`` / ``kYp31CompressorMap`` in
 ``trainers/unified-master/firmware/src/PhysicsEngine.cpp`` (test_compressor_maps checks this).
 """
 
@@ -66,9 +67,58 @@ YA31_ROWS: tuple[tuple[float, int, tuple[CompressorPoint, ...]], ...] = tuple(
     )
 )
 
+# Copeland YP31K1T-PFV (3-ton), HFC-32, 208/230-1-60, chart 118323-230 (printed 6/13/2025):
+# 20 F superheat, 15 F subcooling, 95 F ambient air over, current @ 230 V, nominal +/-5%.
+YP31_MODEL_NAME = "Copeland YP31K1T-PFV (performance chart 118323-230)"
+YP31_EVAPORATING_TEMPS_F = (-10.0, -5.0, 0.0, 10.0, 40.0, 45.0, 55.0, 70.0, 77.0)
+YP31_ROWS: tuple[tuple[float, int, tuple[CompressorPoint, ...]], ...] = tuple(
+    (cond, first, tuple(CompressorPoint(*p) for p in points))
+    for cond, first, points in (
+        (50.0, 0, (
+            (15550, 939, 4.8, 114), (17150, 941, 4.8, 126), (19000, 942, 4.8, 138),
+            (23300, 938, 4.7, 169),
+        )),
+        (70.0, 0, (
+            (13700, 1385, 6.6, 107), (15350, 1385, 6.5, 120), (17100, 1380, 6.5, 133),
+            (21300, 1375, 6.4, 164), (39300, 1300, 6.1, 298), (43200, 1275, 6.0, 327),
+        )),
+        (90.0, 0, (
+            (11600, 1845, 8.4, 98), (13300, 1840, 8.4, 111), (15100, 1830, 8.3, 126),
+            (19200, 1815, 8.3, 159), (36200, 1740, 8.0, 294), (39800, 1715, 7.9, 323),
+            (47900, 1655, 7.6, 387),
+        )),
+        (100.0, 1, (
+            (11950, 2100, 9.5, 104), (13800, 2090, 9.4, 120), (17950, 2070, 9.3, 155),
+            (34600, 1985, 9.0, 292), (38100, 1965, 8.9, 321), (45800, 1905, 8.7, 385),
+            (59500, 1775, 8.0, 498),
+        )),
+        (110.0, 1, (
+            (10300, 2410, 10.7, 94), (12250, 2400, 10.7, 111), (16450, 2370, 10.6, 148),
+            (32800, 2270, 10.2, 289), (36200, 2240, 10.2, 318), (43700, 2190, 9.9, 382),
+            (56800, 2060, 9.3, 495), (63800, 1985, 8.9, 555),
+        )),
+        (120.0, 3, (
+            (14550, 2710, 12.1, 137), (30700, 2600, 11.7, 283), (34100, 2570, 11.6, 313),
+            (41300, 2510, 11.3, 377), (54000, 2390, 10.7, 491), (60700, 2310, 10.3, 551),
+        )),
+        (130.0, 4, (
+            (28400, 2990, 13.4, 274), (31600, 2960, 13.3, 304), (38600, 2900, 13.0, 371),
+            (50900, 2770, 12.4, 485), (57300, 2700, 12.0, 546),
+        )),
+        (140.0, 4, (
+            (25500, 3450, 15.5, 260), (28700, 3420, 15.4, 292), (35600, 3350, 15.1, 360),
+            (47400, 3230, 14.5, 477), (53600, 3160, 14.1, 539),
+        )),
+        (145.0, 4, (
+            (23900, 3710, 16.6, 251), (27100, 3680, 16.5, 283), (33900, 3610, 16.2, 353),
+        )),
+    )
+)
+
 # Refrigerants with their own published compressor chart.
 COMPRESSOR_PROFILES = {
     "R454B": (YA31_MODEL_NAME, YA31_EVAPORATING_TEMPS_F, YA31_ROWS),
+    "R32": (YP31_MODEL_NAME, YP31_EVAPORATING_TEMPS_F, YP31_ROWS),
 }
 
 # Fault factors matching the firmware PhysicsEngine (fault 44 bypass, fault 45 worn valves).
@@ -134,6 +184,10 @@ ZP29_ELECTRICAL = CompressorElectricalSpec(
 YA31_ELECTRICAL = CompressorElectricalSpec(
     "YA31K1E-PFV", 40.0, 370.0, 88.0, 106.0, 330.0, 1.43, 0.72, "040-0166-37"
 )
+YP31_ELECTRICAL = CompressorElectricalSpec(
+    "YP31K1T-PFV", 40.0, 370.0, 88.0, 106.0, 330.0, 1.43, 0.72, "040-0166-37"
+)
+ELECTRICAL_SPECS = {"R454B": YA31_ELECTRICAL, "R32": YP31_ELECTRICAL}
 
 # Running-circuit model constants, mirrored from PhysicsEngine.cpp.
 NO_LOAD_LINE_VOLTS = 241.5
@@ -151,8 +205,8 @@ WINDING_PHASE_SIN = 0.98481
 
 
 def compressor_electrical_spec(refrigerant: str) -> CompressorElectricalSpec:
-    """YA31K1E for R454B; every other refrigerant runs the ZP29K6E."""
-    return YA31_ELECTRICAL if (refrigerant or "").upper() == "R454B" else ZP29_ELECTRICAL
+    """YA31K1E for R454B, YP31K1T for R32; every other refrigerant runs the ZP29K6E."""
+    return ELECTRICAL_SPECS.get((refrigerant or "").upper(), ZP29_ELECTRICAL)
 
 
 def compressor_electrical_reading(

@@ -52,9 +52,25 @@ void testYa31R454bCompressorMapMatchesChart() {
 		"R410A", 45.0f, 130.0f, point));
 	TEST_ASSERT_FLOAT_WITHIN(0.1f, 29400.0f, point.capacity_btu_per_hour);
 	TEST_ASSERT_FALSE(PhysicsEngine::evaluateCompressorForRefrigerant(
-		"R32", 45.0f, 130.0f, point));
+		"R22", 45.0f, 130.0f, point));
 	TEST_ASSERT_NOT_NULL(PhysicsEngine::heatPumpCompressorModelName("R454B"));
 	TEST_ASSERT_NULL(PhysicsEngine::heatPumpCompressorModelName("R410A"));
+
+	// R-32 runs the YP31K1T-PFV chart 118323-230 on both trainers.
+	TEST_ASSERT_TRUE(PhysicsEngine::evaluateCompressorForRefrigerant(
+		"R32", 45.0f, 130.0f, point));
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 31600.0f, point.capacity_btu_per_hour);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 2960.0f, point.power_watts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 13.3f, point.current_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 304.0f, point.mass_flow_lb_per_hour);
+	TEST_ASSERT_TRUE(PhysicsEngine::evaluateCompressorForRefrigerant(
+		"R32", 45.0f, 115.0f, point));
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 35150.0f, point.capacity_btu_per_hour);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 2405.0f, point.power_watts);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 10.9f, point.current_amps);
+	TEST_ASSERT_FLOAT_WITHIN(0.1f, 315.5f, point.mass_flow_lb_per_hour);
+	TEST_ASSERT_EQUAL_STRING("Copeland YP31K1T-PFV (performance chart 118323-230)",
+		PhysicsEngine::heatPumpCompressorModelName("R32"));
 
 	PhysicsEngine engine;
 	engine.begin();
@@ -74,6 +90,12 @@ void testCompressorElectricalFollowsRefrigerant() {
 	TEST_ASSERT_FLOAT_WITHIN(0.01f, 45.0f, zp29.run_cap_uf);
 	TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.58f, zp29.start_winding_ohms);
 	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.92f, zp29.run_winding_ohms);
+	const CompressorElectricalSpec& yp31 = PhysicsEngine::compressorElectricalSpec("R32");
+	TEST_ASSERT_EQUAL_STRING("YP31K1T-PFV", yp31.model);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 40.0f, yp31.run_cap_uf);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.43f, yp31.start_winding_ohms);
+	TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.72f, yp31.run_winding_ohms);
+	TEST_ASSERT_EQUAL_STRING("ZP29K6E-PFV", PhysicsEngine::compressorElectricalSpec("R22").model);
 
 	CompressorElectricalReading running =
 		PhysicsEngine::compressorElectricalReading("R454B", 12.0f, 18.3f);

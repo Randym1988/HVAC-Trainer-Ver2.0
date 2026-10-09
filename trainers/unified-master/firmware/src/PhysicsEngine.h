@@ -46,13 +46,14 @@ public:
     static float evaluatePowerMap(float suction_temp_f, float discharge_temp_f);
     static float evaluateCurrentMap(float suction_temp_f, float discharge_temp_f);
     static float evaluateMassFlowMap(float suction_temp_f, float discharge_temp_f);
-    // Evaluates the compressor linked to the refrigerant (YA31K1E for R454B, ZP29K6E otherwise).
+    // Evaluates the compressor linked to the refrigerant (YA31K1E for R454B, YP31K1T for R32,
+    // ZP29K6E otherwise).
     // Returns true when the chart was published for that refrigerant (no scaling needed).
     static bool evaluateCompressorForRefrigerant(const String& refrigerant,
         float suction_temp_f, float discharge_temp_f, CompressorOperatingPoint& out);
     // Model name when the heat-pump trainer shares this refrigerant's compressor map, else nullptr.
     static const char* heatPumpCompressorModelName(const String& refrigerant);
-    // Electrical data for the compressor linked to the refrigerant (YA31K1E for R454B, ZP29K6E otherwise).
+    // Electrical data for the compressor linked to the refrigerant (same selection as above).
     static const CompressorElectricalSpec& compressorElectricalSpec(const String& refrigerant);
     // Running meter readings derived from compressor (common) amps and total line amps.
     static CompressorElectricalReading compressorElectricalReading(const String& refrigerant,

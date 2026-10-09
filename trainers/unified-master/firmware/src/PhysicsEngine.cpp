@@ -166,6 +166,61 @@ constexpr CompressorMapRow kYa31CompressorMap[] = {
 	}},
 };
 
+// Copeland YP31K1T-PFV (3-ton), HFC-32, 208/230-1-60, chart 118323-230 (printed 6/13/2025):
+// 20 F superheat, 15 F subcooling, 95 F ambient air over, current @ 230 V, nominal +/-5%.
+constexpr float kYp31EvaporatingTemperaturesF[9] = {
+	-10.0f, -5.0f, 0.0f, 10.0f, 40.0f, 45.0f, 55.0f, 70.0f, 77.0f,
+};
+
+constexpr CompressorMapRow kYp31CompressorMap[] = {
+	{50.0f, 0, 4, {
+		{15550.0f, 939.0f, 4.8f, 114.0f}, {17150.0f, 941.0f, 4.8f, 126.0f},
+		{19000.0f, 942.0f, 4.8f, 138.0f}, {23300.0f, 938.0f, 4.7f, 169.0f},
+	}},
+	{70.0f, 0, 6, {
+		{13700.0f, 1385.0f, 6.6f, 107.0f}, {15350.0f, 1385.0f, 6.5f, 120.0f},
+		{17100.0f, 1380.0f, 6.5f, 133.0f}, {21300.0f, 1375.0f, 6.4f, 164.0f},
+		{39300.0f, 1300.0f, 6.1f, 298.0f}, {43200.0f, 1275.0f, 6.0f, 327.0f},
+	}},
+	{90.0f, 0, 7, {
+		{11600.0f, 1845.0f, 8.4f, 98.0f}, {13300.0f, 1840.0f, 8.4f, 111.0f},
+		{15100.0f, 1830.0f, 8.3f, 126.0f}, {19200.0f, 1815.0f, 8.3f, 159.0f},
+		{36200.0f, 1740.0f, 8.0f, 294.0f}, {39800.0f, 1715.0f, 7.9f, 323.0f},
+		{47900.0f, 1655.0f, 7.6f, 387.0f},
+	}},
+	{100.0f, 1, 7, {
+		{11950.0f, 2100.0f, 9.5f, 104.0f}, {13800.0f, 2090.0f, 9.4f, 120.0f},
+		{17950.0f, 2070.0f, 9.3f, 155.0f}, {34600.0f, 1985.0f, 9.0f, 292.0f},
+		{38100.0f, 1965.0f, 8.9f, 321.0f}, {45800.0f, 1905.0f, 8.7f, 385.0f},
+		{59500.0f, 1775.0f, 8.0f, 498.0f},
+	}},
+	{110.0f, 1, 8, {
+		{10300.0f, 2410.0f, 10.7f, 94.0f}, {12250.0f, 2400.0f, 10.7f, 111.0f},
+		{16450.0f, 2370.0f, 10.6f, 148.0f}, {32800.0f, 2270.0f, 10.2f, 289.0f},
+		{36200.0f, 2240.0f, 10.2f, 318.0f}, {43700.0f, 2190.0f, 9.9f, 382.0f},
+		{56800.0f, 2060.0f, 9.3f, 495.0f}, {63800.0f, 1985.0f, 8.9f, 555.0f},
+	}},
+	{120.0f, 3, 6, {
+		{14550.0f, 2710.0f, 12.1f, 137.0f}, {30700.0f, 2600.0f, 11.7f, 283.0f},
+		{34100.0f, 2570.0f, 11.6f, 313.0f}, {41300.0f, 2510.0f, 11.3f, 377.0f},
+		{54000.0f, 2390.0f, 10.7f, 491.0f}, {60700.0f, 2310.0f, 10.3f, 551.0f},
+	}},
+	{130.0f, 4, 5, {
+		{28400.0f, 2990.0f, 13.4f, 274.0f}, {31600.0f, 2960.0f, 13.3f, 304.0f},
+		{38600.0f, 2900.0f, 13.0f, 371.0f}, {50900.0f, 2770.0f, 12.4f, 485.0f},
+		{57300.0f, 2700.0f, 12.0f, 546.0f},
+	}},
+	{140.0f, 4, 5, {
+		{25500.0f, 3450.0f, 15.5f, 260.0f}, {28700.0f, 3420.0f, 15.4f, 292.0f},
+		{35600.0f, 3350.0f, 15.1f, 360.0f}, {47400.0f, 3230.0f, 14.5f, 477.0f},
+		{53600.0f, 3160.0f, 14.1f, 539.0f},
+	}},
+	{145.0f, 4, 3, {
+		{23900.0f, 3710.0f, 16.6f, 251.0f}, {27100.0f, 3680.0f, 16.5f, 283.0f},
+		{33900.0f, 3610.0f, 16.2f, 353.0f},
+	}},
+};
+
 constexpr CompressorElectricalSpec kZp29Electrical = {
 	// ZP29K6E-PFV R-410A 208/230-1-60 electrical components sheet.
 	"ZP29K6E-PFV", 45.0f, 370.0f, 88.0f, 106.0f, 330.0f, 1.58f, 0.92f, "040-0166-37",
@@ -174,6 +229,11 @@ constexpr CompressorElectricalSpec kZp29Electrical = {
 constexpr CompressorElectricalSpec kYa31Electrical = {
 	// YA31K1E-PFV R-454B 208/230-1-60 electrical components sheet.
 	"YA31K1E-PFV", 40.0f, 370.0f, 88.0f, 106.0f, 330.0f, 1.43f, 0.72f, "040-0166-37",
+};
+
+constexpr CompressorElectricalSpec kYp31Electrical = {
+	// YP31K1T-PFV R-32 208/230-1-60 electrical components sheet.
+	"YP31K1T-PFV", 40.0f, 370.0f, 88.0f, 106.0f, 330.0f, 1.43f, 0.72f, "040-0166-37",
 };
 
 struct CompressorProfile {
@@ -199,6 +259,12 @@ constexpr CompressorProfile kYa31Profile = {
 	sizeof(kYa31CompressorMap) / sizeof(kYa31CompressorMap[0]), true, &kYa31Electrical,
 };
 
+constexpr CompressorProfile kYp31Profile = {
+	"Copeland YP31K1T-PFV (performance chart 118323-230)", "R32",
+	kYp31EvaporatingTemperaturesF, kYp31CompressorMap,
+	sizeof(kYp31CompressorMap) / sizeof(kYp31CompressorMap[0]), true, &kYp31Electrical,
+};
+
 // Running-circuit model; mirrored in platform/docker-engine/backend/compressor_maps.py.
 constexpr float kNoLoadLineVolts = 241.5f;
 constexpr float kLineDropVoltsPerAmp = 0.1f;
@@ -216,6 +282,7 @@ constexpr float kWindingPhaseSin = 0.98481f;
 
 const CompressorProfile& compressorProfileFor(const String& refrigerant) {
 	if (refrigerant.equalsIgnoreCase(kYa31Profile.native_refrigerant)) return kYa31Profile;
+	if (refrigerant.equalsIgnoreCase(kYp31Profile.native_refrigerant)) return kYp31Profile;
 	return kZp29Profile;
 }
 

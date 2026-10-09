@@ -8,7 +8,8 @@ for R-410A at 60 Hz, 20 F superheat, and 15 F subcooling; its nominal tolerance
 is +/-5%. Map inputs beyond the published chart range clamp to the nearest
 chart edge. R-454B uses the Copeland YA31K1E-PFV chart 99949-230 (3-ton, 20 F superheat,
 15 F subcooling, current @ 230 V, +/-5%) for both trainer types; its test checks
-published and interpolated points. Other refrigerants continue to use the engine's
+published and interpolated points. R-32 likewise uses the Copeland YP31K1T-PFV
+chart 118323-230 on both trainer types. Other refrigerants continue to use the engine's
 existing scaling factors with the R-410A compressor map. The refrigerant PT tables likewise run
 without CoolProp on the ESP32. Fault coverage checks that blower loss trips the
 low-pressure switch near its trip threshold, holds it until pressure recovers,

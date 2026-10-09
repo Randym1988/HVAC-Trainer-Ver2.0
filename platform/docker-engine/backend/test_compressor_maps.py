@@ -7,6 +7,9 @@ from compressor_maps import (
     YA31_ELECTRICAL,
     YA31_EVAPORATING_TEMPS_F,
     YA31_ROWS,
+    YP31_ELECTRICAL,
+    YP31_EVAPORATING_TEMPS_F,
+    YP31_ROWS,
     ZP29_ELECTRICAL,
     compressor_electrical_reading,
     compressor_model_name,
@@ -45,29 +48,55 @@ class Ya31CompressorMapTests(unittest.TestCase):
         self.assertGreater(high, low)
         self.assertEqual(evaluate_compressor("R454B", 45.0, 170.0), evaluate_compressor("R454B", 45.0, 145.0))
 
-    def test_only_r454b_has_a_dedicated_chart(self):
+    def test_r454b_and_r32_have_dedicated_charts(self):
         self.assertIsNone(evaluate_compressor("R410A", 45.0, 115.0))
-        self.assertIsNone(compressor_model_name("R32"))
+        self.assertIsNone(compressor_model_name("R22"))
         self.assertIn("YA31K1E-PFV", compressor_model_name("R454B"))
+        self.assertIn("YP31K1T-PFV", compressor_model_name("r32"))
 
     @unittest.skipUnless(FIRMWARE_PHYSICS.exists(), "firmware source not available")
-    def test_table_matches_firmware(self):
+    def test_tables_match_firmware(self):
         source = FIRMWARE_PHYSICS.read_text(encoding="utf-8")
-        evaps = re.search(r"kYa31EvaporatingTemperaturesF\[9\] = \{(.*?)\};", source, re.S).group(1)
-        self.assertEqual(
-            tuple(float(v) for v in re.findall(r"(-?[\d.]+)f", evaps)), YA31_EVAPORATING_TEMPS_F
-        )
-        block = re.search(r"kYa31CompressorMap\[\] = \{(.*?)\n\};", source, re.S).group(1)
-        rows = re.findall(r"\{([\d.]+)f, (\d+), (\d+), \{(.*?)\}\},", block, re.S)
-        self.assertEqual(len(rows), len(YA31_ROWS))
-        for (cond, first, count, body), (py_cond, py_first, py_points) in zip(rows, YA31_ROWS):
-            points = [
-                tuple(float(v) for v in p)
-                for p in re.findall(r"\{([\d.]+)f, ([\d.]+)f, ([\d.]+)f, ([\d.]+)f\}", body)
-            ]
-            self.assertEqual((float(cond), int(first), int(count)), (py_cond, py_first, len(py_points)))
-            self.assertEqual(points, [tuple(float(v) for v in p) for p in py_points])
+        for prefix, py_evaps, py_rows in (
+            ("kYa31", YA31_EVAPORATING_TEMPS_F, YA31_ROWS),
+            ("kYp31", YP31_EVAPORATING_TEMPS_F, YP31_ROWS),
+        ):
+            with self.subTest(table=prefix):
+                evaps = re.search(prefix + r"EvaporatingTemperaturesF\[9\] = \{(.*?)\};", source, re.S).group(1)
+                self.assertEqual(tuple(float(v) for v in re.findall(r"(-?[\d.]+)f", evaps)), py_evaps)
+                block = re.search(prefix + r"CompressorMap\[\] = \{(.*?)\n\};", source, re.S).group(1)
+                rows = re.findall(r"\{([\d.]+)f, (\d+), (\d+), \{(.*?)\}\},", block, re.S)
+                self.assertEqual(len(rows), len(py_rows))
+                for (cond, first, count, body), (py_cond, py_first, py_points) in zip(rows, py_rows):
+                    points = [
+                        tuple(float(v) for v in p)
+                        for p in re.findall(r"\{([\d.]+)f, ([\d.]+)f, ([\d.]+)f, ([\d.]+)f\}", body)
+                    ]
+                    self.assertEqual(
+                        (float(cond), int(first), int(count)), (py_cond, py_first, len(py_points))
+                    )
+                    self.assertLessEqual(py_first + len(py_points), len(py_evaps))
+                    self.assertEqual(points, [tuple(float(v) for v in p) for p in py_points])
 
+
+class Yp31CompressorMapTests(unittest.TestCase):
+    assertPoint = Ya31CompressorMapTests.assertPoint
+
+    def test_published_points(self):
+        self.assertPoint(evaluate_compressor("R32", 45.0, 130.0), 31600, 2960, 13.3, 304)
+        self.assertPoint(evaluate_compressor("R32", -10.0, 90.0), 11600, 1845, 8.4, 98)
+        self.assertPoint(evaluate_compressor("R32", 10.0, 120.0), 14550, 2710, 12.1, 137)
+        self.assertPoint(evaluate_compressor("R32", 55.0, 145.0), 33900, 3610, 16.2, 353)
+        self.assertPoint(evaluate_compressor("R32", 77.0, 140.0), 53600, 3160, 14.1, 539)
+
+    def test_bilinear_interpolation(self):
+        self.assertPoint(evaluate_compressor("R32", 45.0, 115.0), 35150, 2405, 10.9, 315.5)
+
+    def test_amps_rise_with_head_and_clamp_outside_chart(self):
+        low = evaluate_compressor("R32", 45.0, 100.0).current_amps
+        high = evaluate_compressor("R32", 45.0, 140.0).current_amps
+        self.assertGreater(high, low)
+        self.assertEqual(evaluate_compressor("R32", 45.0, 170.0), evaluate_compressor("R32", 45.0, 145.0))
 
 class CompressorElectricalTests(unittest.TestCase):
     def test_spec_follows_refrigerant(self):
@@ -75,7 +104,11 @@ class CompressorElectricalTests(unittest.TestCase):
         self.assertEqual(reading["compressor_electrical_model"], "YA31K1E-PFV")
         self.assertEqual(reading["run_cap_rated_uf"], 40.0)
         self.assertEqual((reading["winding_start_ohms"], reading["winding_run_ohms"]), (1.43, 0.72))
-        for refrigerant in ("R410A", "R32", None):
+        reading = compressor_electrical_reading("R32", 12.0, 18.3)
+        self.assertEqual(reading["compressor_electrical_model"], "YP31K1T-PFV")
+        self.assertEqual(reading["run_cap_rated_uf"], 40.0)
+        self.assertEqual((reading["winding_start_ohms"], reading["winding_run_ohms"]), (1.43, 0.72))
+        for refrigerant in ("R410A", "R22", None):
             reading = compressor_electrical_reading(refrigerant, 12.0, 18.3)
             self.assertEqual(reading["compressor_electrical_model"], "ZP29K6E-PFV")
             self.assertEqual(reading["run_cap_rated_uf"], 45.0)
@@ -106,7 +139,11 @@ class CompressorElectricalTests(unittest.TestCase):
     @unittest.skipUnless(FIRMWARE_PHYSICS.exists(), "firmware source not available")
     def test_constants_match_firmware(self):
         source = FIRMWARE_PHYSICS.read_text(encoding="utf-8")
-        for name, spec in (("kZp29Electrical", ZP29_ELECTRICAL), ("kYa31Electrical", YA31_ELECTRICAL)):
+        for name, spec in (
+            ("kZp29Electrical", ZP29_ELECTRICAL),
+            ("kYa31Electrical", YA31_ELECTRICAL),
+            ("kYp31Electrical", YP31_ELECTRICAL),
+        ):
             body = re.search(name + r" = \{.*?\n\t(\".*?)\n\};", source, re.S).group(1)
             fields = [f.strip().strip('"').rstrip("f") for f in body.rstrip(",").split(",")]
             self.assertEqual(fields[0], spec.model)
