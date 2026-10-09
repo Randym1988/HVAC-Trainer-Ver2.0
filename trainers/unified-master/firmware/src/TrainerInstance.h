@@ -2,7 +2,7 @@
 #define TRAINER_INSTANCE_H
 
 #ifndef TRAINER_INSTANCE
-#define TRAINER_INSTANCE 1
+#define TRAINER_INSTANCE 2
 #endif
 
 #endif

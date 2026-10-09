@@ -54,7 +54,9 @@ void testYa31R454bCompressorMapMatchesChart() {
 	TEST_ASSERT_FALSE(PhysicsEngine::evaluateCompressorForRefrigerant(
 		"R22", 45.0f, 130.0f, point));
 	TEST_ASSERT_NOT_NULL(PhysicsEngine::heatPumpCompressorModelName("R454B"));
-	TEST_ASSERT_NULL(PhysicsEngine::heatPumpCompressorModelName("R410A"));
+	TEST_ASSERT_EQUAL_STRING("Copeland ZP29K6E-PFV (performance chart 511570-230)",
+		PhysicsEngine::heatPumpCompressorModelName("R410A"));
+	TEST_ASSERT_NULL(PhysicsEngine::heatPumpCompressorModelName("R22"));
 
 	// R-32 runs the YP31K1T-PFV chart 118323-230 on both trainers.
 	TEST_ASSERT_TRUE(PhysicsEngine::evaluateCompressorForRefrigerant(

@@ -243,14 +243,15 @@ struct CompressorProfile {
 	const float* evaporating_temps_f;
 	const CompressorMapRow* rows;
 	uint8_t row_count;
-	// Heat-pump trainer uses this map for compressor amps (otherwise its legacy formula).
+	// Heat-pump trainer uses this map for compressor amps on the native refrigerant
+	// (other refrigerants keep its legacy formula).
 	bool shared_with_heat_pump;
 	const CompressorElectricalSpec* electrical;
 };
 
 constexpr CompressorProfile kZp29Profile = {
 	kCompressorModelName, "R410A", kEvaporatingTemperaturesF, kCompressorMap,
-	sizeof(kCompressorMap) / sizeof(kCompressorMap[0]), false, &kZp29Electrical,
+	sizeof(kCompressorMap) / sizeof(kCompressorMap[0]), true, &kZp29Electrical,
 };
 
 constexpr CompressorProfile kYa31Profile = {

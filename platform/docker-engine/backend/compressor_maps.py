@@ -1,7 +1,7 @@
 """Published compressor performance maps shared with the trainer firmware.
 
-The YA31K1E-PFV (R-454B) and YP31K1T-PFV (R-32) tables must stay identical to
-``kYa31CompressorMap`` / ``kYp31CompressorMap`` in
+The ZP29K6E-PFV (R-410A), YA31K1E-PFV (R-454B) and YP31K1T-PFV (R-32) tables must stay
+identical to ``kCompressorMap`` / ``kYa31CompressorMap`` / ``kYp31CompressorMap`` in
 ``trainers/unified-master/firmware/src/PhysicsEngine.cpp`` (test_compressor_maps checks this).
 """
 
@@ -17,6 +17,52 @@ class CompressorPoint(NamedTuple):
     current_amps: float
     mass_flow_lb_per_hour: float
 
+
+# Copeland ZP29K6E-PFV, HFC-410A, chart 511570-230: 60 Hz, 20 F superheat, 15 F subcooling.
+ZP29_MODEL_NAME = "Copeland ZP29K6E-PFV (performance chart 511570-230)"
+ZP29_EVAPORATING_TEMPS_F = (-10.0, 0.0, 10.0, 20.0, 30.0, 40.0, 45.0, 50.0, 55.0)
+ZP29_ROWS: tuple[tuple[float, int, tuple[CompressorPoint, ...]], ...] = tuple(
+    (cond, first, tuple(CompressorPoint(*p) for p in points))
+    for cond, first, points in (
+        (80.0, 0, (
+            (12600, 1560, 6.9, 151), (15850, 1560, 6.9, 187), (19800, 1555, 6.9, 231),
+            (24500, 1530, 6.8, 282), (29900, 1490, 6.6, 341), (36200, 1420, 6.3, 408),
+            (39600, 1375, 6.2, 444), (43300, 1320, 6.0, 483), (47100, 1255, 5.9, 524),
+        )),
+        (90.0, 0, (
+            (11500, 1750, 7.8, 144), (14700, 1755, 7.8, 182), (18550, 1750, 7.7, 227),
+            (23200, 1740, 7.7, 279), (28500, 1715, 7.5, 340), (34700, 1665, 7.4, 409),
+            (38000, 1635, 7.2, 447), (41600, 1595, 7.1, 486), (45400, 1545, 7.0, 528),
+        )),
+        (100.0, 0, (
+            (10400, 1980, 8.8, 138), (13500, 1975, 8.7, 176), (17250, 1970, 8.7, 222),
+            (21700, 1960, 8.6, 276), (26900, 1945, 8.5, 338), (32900, 1910, 8.4, 408),
+            (36200, 1885, 8.3, 446), (39700, 1855, 8.2, 487), (43400, 1820, 8.1, 530),
+        )),
+        (110.0, 1, (
+            (15950, 2230, 9.8, 217), (20200, 2220, 9.8, 271), (25200, 2200, 9.6, 333),
+            (31000, 2170, 9.5, 405), (34100, 2150, 9.4, 444), (37500, 2130, 9.4, 485),
+            (41100, 2100, 9.3, 529),
+        )),
+        (115.0, 1, (
+            (15300, 2380, 10.5, 214), (19450, 2360, 10.4, 268), (24300, 2340, 10.3, 331),
+            (29900, 2310, 10.1, 402), (33000, 2300, 10.1, 442), (36300, 2270, 10.0, 483),
+            (39800, 2250, 9.9, 527),
+        )),
+        (130.0, 4, (
+            (21400, 2850, 12.5, 321), (26600, 2810, 12.3, 393), (29400, 2790, 12.3, 433),
+            (32500, 2770, 12.2, 475), (35700, 2750, 12.1, 520),
+        )),
+        (140.0, 5, (
+            (24200, 3230, 14.2, 386), (26800, 3200, 14.1, 425), (29700, 3170, 14.0, 467),
+            (32700, 3140, 13.8, 512),
+        )),
+        (145.0, 5, (
+            (22900, 3460, 15.3, 382), (25500, 3430, 15.1, 421), (28200, 3400, 15.0, 463),
+            (31200, 3370, 14.9, 508),
+        )),
+    )
+)
 
 # Copeland YA31K1E-PFV (3-ton), HFO-454B, 208/230-1-60, chart 99949-230 (printed 4/8/2025):
 # 20 F superheat, 15 F subcooling, 95 F ambient air over, current @ 230 V, nominal +/-5%.
@@ -117,6 +163,7 @@ YP31_ROWS: tuple[tuple[float, int, tuple[CompressorPoint, ...]], ...] = tuple(
 
 # Refrigerants with their own published compressor chart.
 COMPRESSOR_PROFILES = {
+    "R410A": (ZP29_MODEL_NAME, ZP29_EVAPORATING_TEMPS_F, ZP29_ROWS),
     "R454B": (YA31_MODEL_NAME, YA31_EVAPORATING_TEMPS_F, YA31_ROWS),
     "R32": (YP31_MODEL_NAME, YP31_EVAPORATING_TEMPS_F, YP31_ROWS),
 }

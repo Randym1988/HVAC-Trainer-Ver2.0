@@ -143,10 +143,10 @@ The Docker engine answers UDP broadcasts on port 4210. A packet containing `DISC
 
 - **R-454B:** Copeland YA31K1E-PFV (3-ton, 208/230-1-60), performance chart 99949-230 (20 F superheat, 15 F subcooling, 95 F air over, current @ 230 V, nominal +/-5%). Selecting R-454B in the instructor portal switches both the furnace and heat-pump trainers (and the engine simulation) to this map. The furnace physics uses capacity, power, amps and mass flow; the heat pump uses amps from saturated suction/discharge (dew) temperatures.
 - **R-32:** Copeland YP31K1T-PFV (3-ton, 208/230-1-60), performance chart 118323-230 (20 F superheat, 15 F subcooling, 95 F air over, current @ 230 V, nominal +/-5%). Used the same way as the R-454B map on both trainers and in the engine. The chart has no points between 10 F and 40 F evaporating, so values there are interpolated across the gap.
-- **R-410A:** Copeland ZP29K6E-PFV chart 511570-230 on the furnace trainer; the heat-pump trainer keeps its legacy amp formula.
-- **Other refrigerants:** scaled R-410A map (furnace) / legacy formula (heat pump).
-- Faults 44 (internal bypass) and 45 (inefficient compressor) scale chart amps by 0.5 and 0.7/0.9 on R-454B and R-32. Inputs outside the published envelope clamp to the chart edge. Startup/locked-rotor current stays at the existing 143 A (not on the chart).
-- The tables live in `firmware/src/PhysicsEngine.cpp` (`kYa31CompressorMap`, `kYp31CompressorMap`) and `platform/docker-engine/backend/compressor_maps.py`; `test_compressor_maps.py` fails if they drift.
+- **R-410A:** Copeland ZP29K6E-PFV chart 511570-230, used the same way on both trainers and in the engine.
+- **Other refrigerants:** scaled R-410A map (furnace) / legacy `10 + 0.035 x high psig` amp formula (heat pump and engine).
+- Faults 44 (internal bypass) and 45 (inefficient compressor) scale chart amps by 0.5 and 0.7/0.9 on R-410A, R-454B and R-32. Inputs outside the published envelope clamp to the chart edge. Startup/locked-rotor current stays at the existing 143 A (not on the chart).
+- The tables live in `firmware/src/PhysicsEngine.cpp` (`kCompressorMap`, `kYa31CompressorMap`, `kYp31CompressorMap`) and `platform/docker-engine/backend/compressor_maps.py`; `test_compressor_maps.py` fails if they drift.
 
 Copeland electrical component data (the selected refrigerant picks the compressor; R-454B = YA31K1E, R-32 = YP31K1T, all others = ZP29K6E):
 

@@ -11,6 +11,8 @@ from compressor_maps import (
     YP31_EVAPORATING_TEMPS_F,
     YP31_ROWS,
     ZP29_ELECTRICAL,
+    ZP29_EVAPORATING_TEMPS_F,
+    ZP29_ROWS,
     compressor_electrical_reading,
     compressor_model_name,
     evaluate_compressor,
@@ -48,16 +50,22 @@ class Ya31CompressorMapTests(unittest.TestCase):
         self.assertGreater(high, low)
         self.assertEqual(evaluate_compressor("R454B", 45.0, 170.0), evaluate_compressor("R454B", 45.0, 145.0))
 
-    def test_r454b_and_r32_have_dedicated_charts(self):
-        self.assertIsNone(evaluate_compressor("R410A", 45.0, 115.0))
+    def test_each_compressor_has_its_own_chart(self):
+        self.assertIsNone(evaluate_compressor("R22", 45.0, 115.0))
         self.assertIsNone(compressor_model_name("R22"))
+        self.assertIn("ZP29K6E-PFV", compressor_model_name("R410A"))
         self.assertIn("YA31K1E-PFV", compressor_model_name("R454B"))
         self.assertIn("YP31K1T-PFV", compressor_model_name("r32"))
+
+    def test_zp29_points_match_firmware_tests(self):
+        self.assertPoint(evaluate_compressor("R410A", 45.0, 130.0), 29400, 2790, 12.3, 433)
+        self.assertPoint(evaluate_compressor("R410A", 42.5, 122.5), 31325, 2542.5, 11.175, 437.75)
 
     @unittest.skipUnless(FIRMWARE_PHYSICS.exists(), "firmware source not available")
     def test_tables_match_firmware(self):
         source = FIRMWARE_PHYSICS.read_text(encoding="utf-8")
         for prefix, py_evaps, py_rows in (
+            ("k", ZP29_EVAPORATING_TEMPS_F, ZP29_ROWS),
             ("kYa31", YA31_EVAPORATING_TEMPS_F, YA31_ROWS),
             ("kYp31", YP31_EVAPORATING_TEMPS_F, YP31_ROWS),
         ):
